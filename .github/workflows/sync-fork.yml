@@ -1,0 +1,45 @@
+name: Sync fork
+on:
+schedule:
+- cron: "0 3 * * *" # täglich 03:00 UTC
+workflow_dispatch: # manuell auslösbar
+permissions:
+contents: write
+jobs:
+sync:
+runs-on: ubuntu-latest
+steps:
+- name: Checkout fork
+uses: actions/checkout@v4
+with:
+fetch-depth: 0
+
+- name: Git konfigurieren
+run: |
+git config user.name "github-actions[bot]"
+git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+- name: Upstream hinzufügen
+run: |
+git remote add upstream https://github.com/meshtastic/firmware.git
+
+- name: Upstream holen
+run: |
+git fetch upstream --prune --tags
+
+- name: main synchronisieren
+run: |
+BRANCH="main" # falls dein Default-Branch anders heißt, hier anpassen
+git checkout "$BRANCH"
+# zunächst versuchen, nur vorzuspulen (keine Merge-Commits)
+if git merge --ff-only "upstream/$BRANCH"; then
+echo "Fast-forward ok."
+PUSH_FLAGS=""
+else
+echo "Kein Fast-forward möglich – hart auf Upstream setzen."
+git reset --hard "upstream/$BRANCH"
+# Achtung: force push überschreibt Abweichungen im Fork
+PUSH_FLAGS="--force-with-lease"
+fi
+git push origin "$BRANCH" $PUSH_FLAGS
+git push origin --tags
