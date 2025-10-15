@@ -17,7 +17,7 @@ jobs:
       CONFIG_SRC: my-userprefs.jsonc
       CONFIG_DEST: userPrefs.jsonc
       OWNER_REPO: ${{ github.repository }}
-      BACKEND_REPO: "SMLunchen/mh_flasher_backend" 
+      BACKEND_REPO: "SMLunchen/mh_flasher_backend"
       
     steps:
       - name: Fork mit Upstream mergen
@@ -50,7 +50,7 @@ jobs:
 
       - name: userPrefs bereitstellen
         env:
-          USERPREFS_B64: ${{ secrets.USERPREFS_JSONC_B64 }}   # optional, siehe Hinweise unten
+          USERPREFS_B64: ${{ secrets.USERPREFS_JSONC_B64 }}
         run: |
           set -euo pipefail
           cd repo
@@ -84,150 +84,6 @@ jobs:
               bash -lc "platformio run -e $b"
           done
 
-      - name: Firmware einsammeln und strukturieren
-        id: firmware
-        run: |
-          set -euo pipefail
-          mkdir -p firmware-output
-          cd repo
-          
-          VERSION="${{ steps.version.outputs.version }}"
-          SHORT_VERSION="${{ steps.version.outputs.short_version }}"  # NEU!
-          COLLECTED_BOARDS=""
-          
-          for b in $BOARDS; do
-            echo "Sammle Firmware für Board: $b"
-            BOARD_FILES=""
-            
-            # Verschiedene Firmware-Arten sammeln
-            for variant in "" "-factory" "-update" "-ota"; do
-              for ext in bin uf2 hex; do
-                # Verschiedene mögliche Pfade prüfen
-                possible_files=(
-                  ".pio/build/$b/firmware${variant}.$ext"
-                  ".pio/build/$b/firmware.$ext"
-                  "build_output/$b/firmware${variant}.$ext"
-                )
-                
-                for f in "${possible_files[@]}"; do
-                  if [ -f "$f" ]; then
-                    # KORRIGIERT: Verwende die VOLLSTÄNDIGE VERSION
-                    target_name="firmware-${b}${variant}-${VERSION}.$ext"
-                    cp "$f" "../firmware-output/$target_name"
-                    echo "Kopiert: $f -> $target_name"
-                    BOARD_FILES="$BOARD_FILES $target_name"
-                    break
-                  fi
-                done
-              done
-            done
-            
-            # Falls keine spezifischen Varianten gefunden, verwende generische .bin
-            if [ -z "$BOARD_FILES" ]; then
-              for ext in bin uf2 hex; do
-                possible_files=(
-                  ".pio/build/$b/firmware.$ext"
-                )
-                
-                for f in "${possible_files[@]}"; do
-                  if [ -f "$f" ]; then
-                    target_name="firmware-${b}-${VERSION}.$ext"
-                    cp "$f" "../firmware-output/$target_name"
-                    echo "Kopiert (generic): $f -> $target_name"
-                    BOARD_FILES="$BOARD_FILES $target_name"
-                    break
-                  fi
-                done
-              done
-            fi
-            
-            if [ -n "$BOARD_FILES" ]; then
-              COLLECTED_BOARDS="$COLLECTED_BOARDS $b"
-            else
-              echo "WARNUNG: Keine Firmware für Board $b gefunden"
-            fi
-          done
-          
-          cd ..
-          echo "collected_boards=$COLLECTED_BOARDS" >> $GITHUB_OUTPUT
-          
-          echo "=== Gesammelte Firmware-Dateien ==="
-          ls -lah firmware-output/ || true
-          
-      - name: Release erstellen und Assets hochladen (robust)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          TS=$(date -u +%Y%m%d-%H%M%SZ)
-          TAG="auto-${BRANCH}-${TS}"
-          NAME="Auto build ${BRANCH} ${TS}"
-          API="https://api.github.com/repos/${OWNER_REPO}"
-      
-          # Falls keine Artefakte vorhanden sind: sauber beenden
-          if [ ! -d firmware-output ] || [ -z "$(ls -A firmware-output 2>/dev/null || true)" ]; then
-            echo "Keine Dateien in firmware-output – Release wird übersprungen."
-            exit 0
-          fi
-      
-          # Release anlegen
-          http=$(curl -sS -L -w "%{http_code}" -o resp.json \
-            -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "$API/releases" \
-            -d "{\"tag_name\":\"$TAG\",\"name\":\"$NAME\",\"body\":\"Automatischer Build für ${BRANCH}\",\"draft\":false,\"prerelease\":true}")
-          echo "Create release HTTP $http"
-          cat resp.json
-      
-          # 422 = Tag existiert -> Release per Tag holen
-          if [ "$http" -eq 422 ]; then
-            curl -sS -L \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "$API/releases/tags/$TAG" -o resp.json
-            echo "Fetched existing release by tag $TAG"
-            cat resp.json
-          elif [ "$http" -ge 400 ]; then
-            echo "Release-Erstellung fehlgeschlagen (HTTP $http)"
-            exit 1
-          fi
-      
-          # jq sicherstellen und upload_url extrahieren
-          if ! command -v jq >/dev/null 2>&1; then
-            sudo apt-get update -y
-            sudo apt-get install -y jq
-          fi
-          upload_url=$(jq -r '.upload_url | sub("\\{.*$"; "")' resp.json)
-          if [ -z "${upload_url:-}" ] || [ "$upload_url" = "null" ]; then
-            echo "upload_url leer – Response:"
-            cat resp.json
-            exit 1
-          fi
-      
-          # Assets hochladen
-          shopt -s nullglob
-          for path in firmware-output/*; do
-            [ -f "$path" ] || continue
-            name=$(basename "$path")
-            echo "Upload $name..."
-            up_http=$(curl -sS -L -w "%{http_code}" -o /dev/null \
-              -X POST \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Content-Type: application/octet-stream" \
-              "${upload_url}?name=${name}" \
-              --data-binary @"$path")
-            echo "Upload $name HTTP $up_http"
-            if [ "$up_http" -ge 400 ]; then
-              echo "Asset-Upload fehlgeschlagen: $name"
-              exit 1
-            fi
-          done
-          echo "Release erstellt: $TAG"
-          # NEUE/ERWEITERTE STEPS:
       - name: Versionsnummer bestimmen
         id: version
         run: |
@@ -266,17 +122,18 @@ jobs:
           echo "timestamp=$TS" >> $GITHUB_OUTPUT
           echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
           
-          echo "Bestimmte Version: $FULL_VERSION"
-          
-           # Schönere Version für Display
+          # Schönere Version für Display
           if [[ "$VERSION" =~ ^dev-([a-f0-9]+)$ ]]; then
-            # Aus dev-a1b2c3d wird MH-2.7.0-dev-a1b2c3d
             DISPLAY_VERSION="2.7.0-dev-${BASH_REMATCH[1]}"
           else
             DISPLAY_VERSION="$VERSION"
           fi
-          
           echo "display_version=$DISPLAY_VERSION" >> $GITHUB_OUTPUT
+          
+          echo "=== Version Info ==="
+          echo "Full Version: $FULL_VERSION"
+          echo "Short Version: $VERSION"
+          echo "Display Version: $DISPLAY_VERSION"
 
       - name: Firmware einsammeln und strukturieren
         id: firmware
@@ -292,10 +149,9 @@ jobs:
             echo "Sammle Firmware für Board: $b"
             BOARD_FILES=""
             
-            # Verschiedene Firmware-Arten sammeln
+            # Suche nach Firmware-Dateien in verschiedenen Varianten
             for variant in "" "-factory" "-update" "-ota"; do
               for ext in bin uf2 hex; do
-                # Verschiedene mögliche Pfade prüfen
                 possible_files=(
                   ".pio/build/$b/firmware${variant}.$ext"
                   ".pio/build/$b/firmware.$ext"
@@ -313,6 +169,23 @@ jobs:
                 done
               done
             done
+            
+            # Fallback: Wenn keine Varianten gefunden, suche nach generischen Dateien
+            if [ -z "$BOARD_FILES" ]; then
+              for ext in bin uf2 hex; do
+                f=".pio/build/$b/firmware.$ext"
+                if [ -f "$f" ]; then
+                  target_name="firmware-${b}-${VERSION}.$ext"
+                  cp "$f" "../firmware-output/$target_name"
+                  echo "Kopiert (generic): $f -> $target_name"
+                  BOARD_FILES="$BOARD_FILES $target_name"
+                  
+                  # Erstelle zusätzliche Varianten
+                  cp "$f" "../firmware-output/firmware-${b}-factory-${VERSION}.$ext"
+                  cp "$f" "../firmware-output/firmware-${b}-update-${VERSION}.$ext"
+                fi
+              done
+            fi
             
             if [ -n "$BOARD_FILES" ]; then
               COLLECTED_BOARDS="$COLLECTED_BOARDS $b"
@@ -338,7 +211,6 @@ jobs:
           BUILD_DATE="${{ steps.version.outputs.build_date }}"
           TAG="firmware-${VERSION}"
           NAME="Firmware Build ${VERSION}"
-          
           API="https://api.github.com/repos/${OWNER_REPO}"
           
           # Release body erstellen
@@ -359,6 +231,12 @@ jobs:
           Verwende den [Web Flasher](https://flasher.schwarzes-seelenreich.de) für einfache Installation.
           EOF
           
+          # jq installieren falls nicht vorhanden
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y jq
+          fi
+          
           # Release erstellen
           http=$(curl -sS -L -w "%{http_code}" -o resp.json \
             -X POST \
@@ -377,7 +255,6 @@ jobs:
           echo "Create release HTTP: $http"
           
           if [ "$http" -eq 422 ]; then
-            # Release existiert bereits
             echo "Release bereits vorhanden, lade bestehende..."
             curl -sS -L \
               -H "Accept: application/vnd.github+json" \
@@ -430,7 +307,7 @@ jobs:
       - name: Backend benachrichtigen
         if: steps.release.outputs.tag_name != ''
         env:
-          GH_TOKEN: ${{ secrets.BACKEND_REPO_TOKEN }}  # Separates Token für Backend!
+          GH_TOKEN: ${{ secrets.BACKEND_REPO_TOKEN }}
         run: |
           set -euo pipefail
           
@@ -442,6 +319,11 @@ jobs:
           
           # Boards-Array für JSON erstellen
           BOARDS_JSON=$(echo "${{ steps.firmware.outputs.collected_boards }}" | jq -R 'split(" ") | map(select(length > 0))')
+          
+          echo "=== Backend Notification ==="
+          echo "Version: $VERSION"
+          echo "Download URL: https://github.com/${OWNER_REPO}/releases/download/${TAG}"
+          echo "Boards: ${{ steps.firmware.outputs.collected_boards }}"
           
           # Repository Dispatch senden
           curl -X POST \
