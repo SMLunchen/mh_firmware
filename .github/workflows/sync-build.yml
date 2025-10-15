@@ -138,14 +138,13 @@ jobs:
             exit 1
           fi
       
-          # upload_url aus JSON per Python extrahieren (robust gg. Whitespaces)
-          upload_url=$(python3 - <<'PY'
-      import json, sys
-      u = json.load(open("resp.json"))["upload_url"]
-      print(u.split("{",1)[0])
-      PY
-      )
-          if [ -z "${upload_url:-}" ]; then
+          # jq sicherstellen und upload_url extrahieren
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y jq
+          fi
+          upload_url=$(jq -r '.upload_url | sub("\\{.*$"; "")' resp.json)
+          if [ -z "${upload_url:-}" ] || [ "$upload_url" = "null" ]; then
             echo "upload_url leer – Response:"
             cat resp.json
             exit 1
