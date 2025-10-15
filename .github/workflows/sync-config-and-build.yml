@@ -1,0 +1,265 @@
+name: Sync, config and build
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync_build:
+    runs-on: ubuntu-latest
+    env:
+      BRANCH: develop
+      DOCKER_IMAGE: infinitecoding/platformio-for-ci:latest
+      BOARDS: "heltec-v3 heltec-wireless-tracker-V1-0"
+      CONFIG_SRC: my-userprefs.jsonc
+      CONFIG_DEST: userPrefs.jsonc
+      OWNER_REPO: ${{ github.repository }}
+      BACKEND_REPO: "dein-username/flasher-backend"  # ANPASSEN!
+      
+    steps:
+      # Deine bestehenden Steps...
+      - name: Fork mit Upstream mergen
+        # ... (unverändert)
+
+      - name: Repo klonen (Branch)
+        # ... (unverändert)
+
+      - name: userPrefs bereitstellen
+        # ... (unverändert)
+
+      - name: Docker Image ziehen
+        # ... (unverändert)
+
+      - name: Build (PlatformIO im Docker)
+        # ... (unverändert)
+
+      # NEUE/ERWEITERTE STEPS:
+      - name: Versionsnummer bestimmen
+        id: version
+        run: |
+          set -euo pipefail
+          cd repo
+          
+          # Verschiedene Methoden um Version zu bestimmen
+          VERSION=""
+          
+          # Methode 1: Aus version.h oder ähnlichem
+          if [ -f "version.h" ]; then
+            VERSION=$(grep -o '#define.*VERSION.*"[^"]*"' version.h | sed 's/.*"\([^"]*\)".*/\1/' | head -1)
+          fi
+          
+          # Methode 2: Aus platformio.ini
+          if [ -z "$VERSION" ] && [ -f "platformio.ini" ]; then
+            VERSION=$(grep -o 'build_flags.*-DAPP_VERSION="[^"]*"' platformio.ini | sed 's/.*="\([^"]*\)".*/\1/' || echo "")
+          fi
+          
+          # Fallback: Git-basiert
+          if [ -z "$VERSION" ]; then
+            GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            GIT_HASH=$(git rev-parse --short HEAD)
+            if [ -n "$GIT_TAG" ]; then
+              VERSION="${GIT_TAG}-${GIT_HASH}"
+            else
+              VERSION="dev-${GIT_HASH}"
+            fi
+          fi
+          
+          TS=$(date -u +%Y%m%d-%H%M%S)
+          FULL_VERSION="${VERSION}-${TS}"
+          
+          echo "version=$FULL_VERSION" >> $GITHUB_OUTPUT
+          echo "short_version=$VERSION" >> $GITHUB_OUTPUT
+          echo "timestamp=$TS" >> $GITHUB_OUTPUT
+          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
+          
+          echo "Bestimmte Version: $FULL_VERSION"
+
+      - name: Firmware einsammeln und strukturieren
+        id: firmware
+        run: |
+          set -euo pipefail
+          mkdir -p firmware-output
+          cd repo
+          
+          VERSION="${{ steps.version.outputs.version }}"
+          COLLECTED_BOARDS=""
+          
+          for b in $BOARDS; do
+            echo "Sammle Firmware für Board: $b"
+            BOARD_FILES=""
+            
+            # Verschiedene Firmware-Arten sammeln
+            for variant in "" "-factory" "-update" "-ota"; do
+              for ext in bin uf2 hex; do
+                # Verschiedene mögliche Pfade prüfen
+                possible_files=(
+                  ".pio/build/$b/firmware${variant}.$ext"
+                  ".pio/build/$b/firmware.$ext"
+                  "build_output/$b/firmware${variant}.$ext"
+                )
+                
+                for f in "${possible_files[@]}"; do
+                  if [ -f "$f" ]; then
+                    target_name="firmware-${b}${variant}-${VERSION}.$ext"
+                    cp "$f" "../firmware-output/$target_name"
+                    echo "Kopiert: $f -> $target_name"
+                    BOARD_FILES="$BOARD_FILES $target_name"
+                    break
+                  fi
+                done
+              done
+            done
+            
+            if [ -n "$BOARD_FILES" ]; then
+              COLLECTED_BOARDS="$COLLECTED_BOARDS $b"
+            else
+              echo "WARNUNG: Keine Firmware für Board $b gefunden"
+            fi
+          done
+          
+          cd ..
+          echo "collected_boards=$COLLECTED_BOARDS" >> $GITHUB_OUTPUT
+          
+          echo "=== Gesammelte Firmware-Dateien ==="
+          ls -lah firmware-output/ || true
+
+      - name: Release erstellen
+        id: release
+        if: steps.firmware.outputs.collected_boards != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          BUILD_DATE="${{ steps.version.outputs.build_date }}"
+          TAG="firmware-${VERSION}"
+          NAME="Firmware Build ${VERSION}"
+          
+          API="https://api.github.com/repos/${OWNER_REPO}"
+          
+          # Release body erstellen
+          cat > release_body.md << EOF
+          # Automatischer Firmware Build
+          
+          **Version:** ${VERSION}  
+          **Build-Datum:** ${BUILD_DATE}  
+          **Branch:** ${BRANCH}  
+          **Boards:** ${{ steps.firmware.outputs.collected_boards }}
+          
+          ## Änderungen
+          - Automatischer Sync mit Upstream
+          - Custom userPrefs angewendet
+          - Für folgende Hardware gebaut: ${{ steps.firmware.outputs.collected_boards }}
+          
+          ## Installation
+          Verwende den [Web Flasher](https://flasher.schwarzes-seelenreich.de) für einfache Installation.
+          EOF
+          
+          # Release erstellen
+          http=$(curl -sS -L -w "%{http_code}" -o resp.json \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$API/releases" \
+            -d "{
+              \"tag_name\":\"$TAG\",
+              \"name\":\"$NAME\",
+              \"body\":$(jq -Rs . release_body.md),
+              \"draft\":false,
+              \"prerelease\":true
+            }")
+          
+          echo "Create release HTTP: $http"
+          
+          if [ "$http" -eq 422 ]; then
+            # Release existiert bereits
+            echo "Release bereits vorhanden, lade bestehende..."
+            curl -sS -L \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              "$API/releases/tags/$TAG" -o resp.json
+          elif [ "$http" -ge 400 ]; then
+            echo "Release-Erstellung fehlgeschlagen!"
+            cat resp.json
+            exit 1
+          fi
+          
+          # Upload URL extrahieren
+          upload_url=$(jq -r '.upload_url | sub("\\{.*$"; "")' resp.json)
+          release_id=$(jq -r '.id' resp.json)
+          
+          echo "upload_url=$upload_url" >> $GITHUB_OUTPUT
+          echo "release_id=$release_id" >> $GITHUB_OUTPUT
+          echo "tag_name=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Assets hochladen
+        if: steps.release.outputs.upload_url != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          upload_url="${{ steps.release.outputs.upload_url }}"
+          
+          shopt -s nullglob
+          for path in firmware-output/*; do
+            [ -f "$path" ] || continue
+            name=$(basename "$path")
+            
+            echo "Upload: $name"
+            http=$(curl -sS -L -w "%{http_code}" -o /dev/null \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Content-Type: application/octet-stream" \
+              "${upload_url}?name=${name}" \
+              --data-binary @"$path")
+            
+            if [ "$http" -ge 400 ]; then
+              echo "FEHLER beim Upload von $name (HTTP $http)"
+              exit 1
+            else
+              echo "✓ $name hochgeladen (HTTP $http)"
+            fi
+          done
+
+      - name: Backend benachrichtigen
+        if: steps.release.outputs.tag_name != ''
+        env:
+          GH_TOKEN: ${{ secrets.BACKEND_REPO_TOKEN }}  # Separates Token für Backend!
+        run: |
+          set -euo pipefail
+          
+          VERSION="${{ steps.version.outputs.version }}"
+          SHORT_VERSION="${{ steps.version.outputs.short_version }}"
+          BUILD_DATE="${{ steps.version.outputs.build_date }}"
+          TAG="${{ steps.release.outputs.tag_name }}"
+          RELEASE_URL="https://github.com/${OWNER_REPO}/releases/tag/${TAG}"
+          
+          # Boards-Array für JSON erstellen
+          BOARDS_JSON=$(echo "${{ steps.firmware.outputs.collected_boards }}" | jq -R 'split(" ") | map(select(length > 0))')
+          
+          # Repository Dispatch senden
+          curl -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${BACKEND_REPO}/dispatches" \
+            -d "{
+              \"event_type\": \"firmware-built\",
+              \"client_payload\": {
+                \"version\": \"$VERSION\",
+                \"short_version\": \"$SHORT_VERSION\",
+                \"build_date\": \"$BUILD_DATE\",
+                \"tag_name\": \"$TAG\",
+                \"release_url\": \"$RELEASE_URL\",
+                \"download_base_url\": \"https://github.com/${OWNER_REPO}/releases/download/${TAG}\",
+                \"boards\": $BOARDS_JSON,
+                \"branch\": \"$BRANCH\"
+              }
+            }"
+          
+          echo "✓ Backend benachrichtigt für Version: $VERSION"
