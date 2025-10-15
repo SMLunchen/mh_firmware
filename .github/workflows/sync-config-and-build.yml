@@ -214,6 +214,16 @@ jobs:
           echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
           
           echo "Bestimmte Version: $FULL_VERSION"
+          
+           # Schönere Version für Display
+          if [[ "$VERSION" =~ ^dev-([a-f0-9]+)$ ]]; then
+            # Aus dev-a1b2c3d wird MH-2.7.0-dev-a1b2c3d
+            DISPLAY_VERSION="2.7.0-dev-${BASH_REMATCH[1]}"
+          else
+            DISPLAY_VERSION="$VERSION"
+          fi
+          
+          echo "display_version=$DISPLAY_VERSION" >> $GITHUB_OUTPUT
 
       - name: Firmware einsammeln und strukturieren
         id: firmware
