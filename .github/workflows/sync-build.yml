@@ -107,6 +107,12 @@ jobs:
           NAME="Auto build ${BRANCH} ${TS}"
           API="https://api.github.com/repos/${OWNER_REPO}"
       
+          # Falls keine Artefakte vorhanden sind: sauber beenden
+          if [ ! -d firmware-output ] || [ -z "$(ls -A firmware-output 2>/dev/null || true)" ]; then
+            echo "Keine Dateien in firmware-output – Release wird übersprungen."
+            exit 0
+          fi
+      
           # Release anlegen
           http=$(curl -sS -L -w "%{http_code}" -o resp.json \
             -X POST \
@@ -118,7 +124,7 @@ jobs:
           echo "Create release HTTP $http"
           cat resp.json
       
-          # Wenn 422 (z. B. Tag existiert), Release per Tag abrufen
+          # 422 = Tag existiert -> Release per Tag holen
           if [ "$http" -eq 422 ]; then
             curl -sS -L \
               -H "Accept: application/vnd.github+json" \
@@ -132,8 +138,13 @@ jobs:
             exit 1
           fi
       
-          # Upload-URL extrahieren
-          upload_url=$(grep -o '"upload_url":"[^"]*"' resp.json | head -n1 | cut -d'"' -f4 | sed 's/{.*}//')
+          # upload_url aus JSON per Python extrahieren (robust gg. Whitespaces)
+          upload_url=$(python3 - <<'PY'
+      import json, sys
+      u = json.load(open("resp.json"))["upload_url"]
+      print(u.split("{",1)[0])
+      PY
+      )
           if [ -z "${upload_url:-}" ]; then
             echo "upload_url leer – Response:"
             cat resp.json
