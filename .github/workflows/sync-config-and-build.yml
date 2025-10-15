@@ -84,23 +84,76 @@ jobs:
               bash -lc "platformio run -e $b"
           done
 
-      - name: Firmware einsammeln
+      - name: Firmware einsammeln und strukturieren
+        id: firmware
         run: |
           set -euo pipefail
           mkdir -p firmware-output
           cd repo
-          TS=$(date -u +%Y%m%d-%H%M%SZ)
+          
+          VERSION="${{ steps.version.outputs.version }}"
+          SHORT_VERSION="${{ steps.version.outputs.short_version }}"  # NEU!
+          COLLECTED_BOARDS=""
+          
           for b in $BOARDS; do
-            for ext in bin uf2 hex; do
-              f=".pio/build/$b/firmware.$ext"
-              if [ -f "$f" ]; then
-                cp "$f" "../firmware-output/firmware-${b}-${TS}.${ext}"
-              fi
+            echo "Sammle Firmware für Board: $b"
+            BOARD_FILES=""
+            
+            # Verschiedene Firmware-Arten sammeln
+            for variant in "" "-factory" "-update" "-ota"; do
+              for ext in bin uf2 hex; do
+                # Verschiedene mögliche Pfade prüfen
+                possible_files=(
+                  ".pio/build/$b/firmware${variant}.$ext"
+                  ".pio/build/$b/firmware.$ext"
+                  "build_output/$b/firmware${variant}.$ext"
+                )
+                
+                for f in "${possible_files[@]}"; do
+                  if [ -f "$f" ]; then
+                    # KORRIGIERT: Verwende die VOLLSTÄNDIGE VERSION
+                    target_name="firmware-${b}${variant}-${VERSION}.$ext"
+                    cp "$f" "../firmware-output/$target_name"
+                    echo "Kopiert: $f -> $target_name"
+                    BOARD_FILES="$BOARD_FILES $target_name"
+                    break
+                  fi
+                done
+              done
             done
+            
+            # Falls keine spezifischen Varianten gefunden, verwende generische .bin
+            if [ -z "$BOARD_FILES" ]; then
+              for ext in bin uf2 hex; do
+                possible_files=(
+                  ".pio/build/$b/firmware.$ext"
+                )
+                
+                for f in "${possible_files[@]}"; do
+                  if [ -f "$f" ]; then
+                    target_name="firmware-${b}-${VERSION}.$ext"
+                    cp "$f" "../firmware-output/$target_name"
+                    echo "Kopiert (generic): $f -> $target_name"
+                    BOARD_FILES="$BOARD_FILES $target_name"
+                    break
+                  fi
+                done
+              done
+            fi
+            
+            if [ -n "$BOARD_FILES" ]; then
+              COLLECTED_BOARDS="$COLLECTED_BOARDS $b"
+            else
+              echo "WARNUNG: Keine Firmware für Board $b gefunden"
+            fi
           done
+          
           cd ..
-          ls -lh firmware-output || true
-
+          echo "collected_boards=$COLLECTED_BOARDS" >> $GITHUB_OUTPUT
+          
+          echo "=== Gesammelte Firmware-Dateien ==="
+          ls -lah firmware-output/ || true
+          
       - name: Release erstellen und Assets hochladen (robust)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
