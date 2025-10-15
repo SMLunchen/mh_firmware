@@ -20,23 +20,161 @@ jobs:
       BACKEND_REPO: "SMLunchen/mh_flasher_backend" 
       
     steps:
-      # Deine bestehenden Steps...
       - name: Fork mit Upstream mergen
-        # ... (unverändert)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          http_code=$(curl -sS -L -w "%{http_code}" -o resp.json \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$OWNER_REPO/merge-upstream" \
+            -d "{\"branch\":\"$BRANCH\"}")
+          cat resp.json
+          if [ "$http_code" -eq 409 ]; then
+            echo "Merge-Konflikt. Bitte manuell lösen oder PR-Variante nutzen."
+            exit 1
+          fi
+          test "$http_code" -lt 400
 
       - name: Repo klonen (Branch)
-        # ... (unverändert)
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git clone --depth=1 --branch "$BRANCH" "https://x-access-token:${TOKEN}@github.com/${OWNER_REPO}.git" repo
+          cd repo
+          git submodule update --init --recursive
 
       - name: userPrefs bereitstellen
-        # ... (unverändert)
+        env:
+          USERPREFS_B64: ${{ secrets.USERPREFS_JSONC_B64 }}   # optional, siehe Hinweise unten
+        run: |
+          set -euo pipefail
+          cd repo
+          if [ -n "$USERPREFS_B64" ]; then
+            echo "$USERPREFS_B64" | base64 -d > "$CONFIG_DEST"
+            echo "userPrefs aus Secret geschrieben."
+          elif [ -f "$CONFIG_SRC" ]; then
+            cp "$CONFIG_SRC" "$CONFIG_DEST"
+            echo "userPrefs aus Repo ($CONFIG_SRC) kopiert."
+          else
+            echo "WARN: Weder Secret noch $CONFIG_SRC gefunden. Es wird mit Defaults gebaut."
+          fi
+          head -n 5 "$CONFIG_DEST" || true
 
       - name: Docker Image ziehen
-        # ... (unverändert)
+        run: |
+          set -euo pipefail
+          docker pull "$DOCKER_IMAGE"
 
       - name: Build (PlatformIO im Docker)
-        # ... (unverändert)
+        run: |
+          set -euo pipefail
+          cd repo
+          mkdir -p .pio
+          for b in $BOARDS; do
+            echo "Build $b..."
+            docker run --rm \
+              -v "$PWD:/workspace" \
+              -w /workspace \
+              "$DOCKER_IMAGE" \
+              bash -lc "platformio run -e $b"
+          done
 
-      # NEUE/ERWEITERTE STEPS:
+      - name: Firmware einsammeln
+        run: |
+          set -euo pipefail
+          mkdir -p firmware-output
+          cd repo
+          TS=$(date -u +%Y%m%d-%H%M%SZ)
+          for b in $BOARDS; do
+            for ext in bin uf2 hex; do
+              f=".pio/build/$b/firmware.$ext"
+              if [ -f "$f" ]; then
+                cp "$f" "../firmware-output/firmware-${b}-${TS}.${ext}"
+              fi
+            done
+          done
+          cd ..
+          ls -lh firmware-output || true
+
+      - name: Release erstellen und Assets hochladen (robust)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TS=$(date -u +%Y%m%d-%H%M%SZ)
+          TAG="auto-${BRANCH}-${TS}"
+          NAME="Auto build ${BRANCH} ${TS}"
+          API="https://api.github.com/repos/${OWNER_REPO}"
+      
+          # Falls keine Artefakte vorhanden sind: sauber beenden
+          if [ ! -d firmware-output ] || [ -z "$(ls -A firmware-output 2>/dev/null || true)" ]; then
+            echo "Keine Dateien in firmware-output – Release wird übersprungen."
+            exit 0
+          fi
+      
+          # Release anlegen
+          http=$(curl -sS -L -w "%{http_code}" -o resp.json \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$API/releases" \
+            -d "{\"tag_name\":\"$TAG\",\"name\":\"$NAME\",\"body\":\"Automatischer Build für ${BRANCH}\",\"draft\":false,\"prerelease\":true}")
+          echo "Create release HTTP $http"
+          cat resp.json
+      
+          # 422 = Tag existiert -> Release per Tag holen
+          if [ "$http" -eq 422 ]; then
+            curl -sS -L \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$API/releases/tags/$TAG" -o resp.json
+            echo "Fetched existing release by tag $TAG"
+            cat resp.json
+          elif [ "$http" -ge 400 ]; then
+            echo "Release-Erstellung fehlgeschlagen (HTTP $http)"
+            exit 1
+          fi
+      
+          # jq sicherstellen und upload_url extrahieren
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y jq
+          fi
+          upload_url=$(jq -r '.upload_url | sub("\\{.*$"; "")' resp.json)
+          if [ -z "${upload_url:-}" ] || [ "$upload_url" = "null" ]; then
+            echo "upload_url leer – Response:"
+            cat resp.json
+            exit 1
+          fi
+      
+          # Assets hochladen
+          shopt -s nullglob
+          for path in firmware-output/*; do
+            [ -f "$path" ] || continue
+            name=$(basename "$path")
+            echo "Upload $name..."
+            up_http=$(curl -sS -L -w "%{http_code}" -o /dev/null \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Content-Type: application/octet-stream" \
+              "${upload_url}?name=${name}" \
+              --data-binary @"$path")
+            echo "Upload $name HTTP $up_http"
+            if [ "$up_http" -ge 400 ]; then
+              echo "Asset-Upload fehlgeschlagen: $name"
+              exit 1
+            fi
+          done
+          echo "Release erstellt: $TAG"
+          # NEUE/ERWEITERTE STEPS:
       - name: Versionsnummer bestimmen
         id: version
         run: |
