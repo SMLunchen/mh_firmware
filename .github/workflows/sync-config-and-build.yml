@@ -90,57 +90,83 @@ jobs:
           set -euo pipefail
           cd repo
           
-          # Original Meshtastic Version aus Git Tags bestimmen
+          # ECHTER Meshtastic Version-Tag abrufen
           MESHTASTIC_VERSION=""
           
-          # Methode 1: Neuester Git Tag (bevorzugt)
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          if [[ "$LATEST_TAG" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+.*) ]]; then
-            MESHTASTIC_VERSION="${BASH_REMATCH[1]}"
-            echo "Found Meshtastic version from git tag: $MESHTASTIC_VERSION"
+          echo "=== Git Tag Detection ==="
+          
+          # Methode 1: Aktueller Tag (falls auf Tag-Commit)
+          CURRENT_TAG=$(git describe --exact-match --tags HEAD 2>/dev/null || echo "")
+          if [ -n "$CURRENT_TAG" ]; then
+            echo "Current commit is on tag: $CURRENT_TAG"
+            MESHTASTIC_VERSION="${CURRENT_TAG#v}"  # v2.7.12 -> 2.7.12
           fi
           
-          # Methode 2: Aus version.h falls kein Tag
-          if [ -z "$MESHTASTIC_VERSION" ] && [ -f "src/mesh/generated/version.h" ]; then
-            MESHTASTIC_VERSION=$(grep -o '#define.*VERSION.*"[^"]*"' src/mesh/generated/version.h | sed 's/.*"\([^"]*\)".*/\1/' | head -1)
-            echo "Found version from version.h: $MESHTASTIC_VERSION"
+          # Methode 2: Nächster erreichbarer Tag
+          if [ -z "$MESHTASTIC_VERSION" ]; then
+            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            if [ -n "$LATEST_TAG" ]; then
+              echo "Latest reachable tag: $LATEST_TAG"
+              MESHTASTIC_VERSION="${LATEST_TAG#v}"  # v2.7.12 -> 2.7.12
+            fi
           fi
           
-          # Methode 3: Aus CMakeLists.txt oder ähnlichem
-          if [ -z "$MESHTASTIC_VERSION" ] && [ -f "CMakeLists.txt" ]; then
-            MESHTASTIC_VERSION=$(grep -o 'set.*VERSION.*[0-9]*\.[0-9]*\.[0-9]*' CMakeLists.txt | grep -o '[0-9]*\.[0-9]*\.[0-9]*' | head -1)
-            echo "Found version from CMakeLists.txt: $MESHTASTIC_VERSION"
+          # Methode 3: Alle Tags anzeigen und neuesten nehmen
+          if [ -z "$MESHTASTIC_VERSION" ]; then
+            echo "Available tags:"
+            git tag --sort=-version:refname | head -10
+            
+            LATEST_TAG=$(git tag --sort=-version:refname | head -1)
+            if [ -n "$LATEST_TAG" ]; then
+              echo "Using latest available tag: $LATEST_TAG"
+              MESHTASTIC_VERSION="${LATEST_TAG#v}"
+            fi
+          fi
+          
+          # Methode 4: Aus version.h extrahieren
+          if [ -z "$MESHTASTIC_VERSION" ]; then
+            echo "Trying to extract version from source files..."
+            
+            # Verschiedene mögliche Dateien prüfen
+            for file in "src/mesh/generated/version.h" "version.h" "src/main.cpp" "platformio.ini"; do
+              if [ -f "$file" ]; then
+                echo "Checking $file"
+                VERSION_FOUND=$(grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' "$file" | head -1 || echo "")
+                if [ -n "$VERSION_FOUND" ]; then
+                  MESHTASTIC_VERSION="$VERSION_FOUND"
+                  echo "Found version in $file: $MESHTASTIC_VERSION"
+                  break
+                fi
+              fi
+            done
           fi
           
           # Fallback
           if [ -z "$MESHTASTIC_VERSION" ]; then
-            MESHTASTIC_VERSION="2.7.0"
+            MESHTASTIC_VERSION="2.7.12"  # Aktueller bekannter Tag
             echo "Using fallback version: $MESHTASTIC_VERSION"
           fi
           
-          # Git Hash für Custom-Kennung
+          # Git-Info für Custom-Kennzeichnung
           GIT_HASH=$(git rev-parse --short HEAD)
           TS=$(date -u +%Y%m%d-%H%M%S)
           
           # Versionen erstellen
-          # Hauptversion: Original Meshtastic + Custom-Suffix
           FULL_VERSION="${MESHTASTIC_VERSION}-mh-${GIT_HASH}-${TS}"
           SHORT_VERSION="${MESHTASTIC_VERSION}-mh-${GIT_HASH}"
+          DISPLAY_VERSION="${MESHTASTIC_VERSION}-MH"
           
           echo "base_version=$MESHTASTIC_VERSION" >> $GITHUB_OUTPUT
           echo "version=$FULL_VERSION" >> $GITHUB_OUTPUT
           echo "short_version=$SHORT_VERSION" >> $GITHUB_OUTPUT
+          echo "display_version=$DISPLAY_VERSION" >> $GITHUB_OUTPUT
           echo "timestamp=$TS" >> $GITHUB_OUTPUT
           echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
           
-          # Display-Version (schön für Frontend)
-          DISPLAY_VERSION="${MESHTASTIC_VERSION}-MH"
-          echo "display_version=$DISPLAY_VERSION" >> $GITHUB_OUTPUT
-          
-          echo "=== Version Info ==="
+          echo "=== Final Version Info ==="
           echo "Meshtastic Base: $MESHTASTIC_VERSION"
           echo "Full Version: $FULL_VERSION"
-          echo "Short Version: $SHORT_VERSION"
+          echo "Short Version: $SHORT_VERSION"  
           echo "Display Version: $DISPLAY_VERSION"
           
       - name: Firmware einsammeln und strukturieren
