@@ -90,15 +90,13 @@ jobs:
           set -euo pipefail
           cd repo
           
-          # Verschiedene Methoden um Version zu bestimmen
+          # Base Version bestimmen (ohne Timestamp!)
           VERSION=""
           
-          # Methode 1: Aus version.h oder ähnlichem
           if [ -f "version.h" ]; then
             VERSION=$(grep -o '#define.*VERSION.*"[^"]*"' version.h | sed 's/.*"\([^"]*\)".*/\1/' | head -1)
           fi
           
-          # Methode 2: Aus platformio.ini
           if [ -z "$VERSION" ] && [ -f "platformio.ini" ]; then
             VERSION=$(grep -o 'build_flags.*-DAPP_VERSION="[^"]*"' platformio.ini | sed 's/.*="\([^"]*\)".*/\1/' || echo "")
           fi
@@ -110,19 +108,22 @@ jobs:
             if [ -n "$GIT_TAG" ]; then
               VERSION="${GIT_TAG}-${GIT_HASH}"
             else
-              VERSION="dev-${GIT_HASH}"
+              VERSION="dev-${GIT_HASH}"  # NUR Hash, KEIN Timestamp hier!
             fi
           fi
           
+          # Timestamp separat für Tag-Namen
           TS=$(date -u +%Y%m%d-%H%M%S)
+          
+          # KORRIGIERT: Nur einmal Timestamp anhängen
           FULL_VERSION="${VERSION}-${TS}"
           
           echo "version=$FULL_VERSION" >> $GITHUB_OUTPUT
-          echo "short_version=$VERSION" >> $GITHUB_OUTPUT
+          echo "short_version=$VERSION" >> $GITHUB_OUTPUT  # Ohne Timestamp!
           echo "timestamp=$TS" >> $GITHUB_OUTPUT
           echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
           
-          # Schönere Version für Display
+          # Display Version
           if [[ "$VERSION" =~ ^dev-([a-f0-9]+)$ ]]; then
             DISPLAY_VERSION="2.7.0-dev-${BASH_REMATCH[1]}"
           else
@@ -132,9 +133,9 @@ jobs:
           
           echo "=== Version Info ==="
           echo "Full Version: $FULL_VERSION"
-          echo "Short Version: $VERSION"
+          echo "Short Version: $VERSION" 
           echo "Display Version: $DISPLAY_VERSION"
-
+          
       - name: Firmware einsammeln und strukturieren
         id: firmware
         run: |
@@ -317,32 +318,49 @@ jobs:
           TAG="${{ steps.release.outputs.tag_name }}"
           RELEASE_URL="https://github.com/${OWNER_REPO}/releases/tag/${TAG}"
           
-          # Boards-Array für JSON erstellen
-          BOARDS_JSON=$(echo "${{ steps.firmware.outputs.collected_boards }}" | jq -R 'split(" ") | map(select(length > 0))')
+          # KORRIGIERT: Boards richtig als Array übertragen
+          BOARDS_RAW="${{ steps.firmware.outputs.collected_boards }}"
+          echo "Raw boards: '$BOARDS_RAW'"
           
-          echo "=== Backend Notification ==="
+          # Erstelle JSON-Array aus Space-separated String
+          BOARDS_JSON="[]"
+          if [ -n "$BOARDS_RAW" ]; then
+            BOARDS_JSON=$(echo "$BOARDS_RAW" | jq -R 'split(" ") | map(select(. != ""))')
+          fi
+          
+          echo "=== Backend Notification Debug ==="
           echo "Version: $VERSION"
-          echo "Download URL: https://github.com/${OWNER_REPO}/releases/download/${TAG}"
-          echo "Boards: ${{ steps.firmware.outputs.collected_boards }}"
+          echo "Short Version: $SHORT_VERSION"
+          echo "Download Base URL: https://github.com/${OWNER_REPO}/releases/download/${TAG}"
+          echo "Boards JSON: $BOARDS_JSON"
+          echo "Individual boards:"
+          echo "$BOARDS_JSON" | jq -r '.[]' | while read board; do
+            echo "  - $board"
+          done
           
           # Repository Dispatch senden
+          DISPATCH_PAYLOAD="{
+            \"event_type\": \"firmware-built\",
+            \"client_payload\": {
+              \"version\": \"$VERSION\",
+              \"short_version\": \"$SHORT_VERSION\",
+              \"build_date\": \"$BUILD_DATE\",
+              \"tag_name\": \"$TAG\",
+              \"release_url\": \"$RELEASE_URL\",
+              \"download_base_url\": \"https://github.com/${OWNER_REPO}/releases/download/${TAG}\",
+              \"boards\": $BOARDS_JSON,
+              \"branch\": \"$BRANCH\"
+            }
+          }"
+          
+          echo "Dispatch payload:"
+          echo "$DISPATCH_PAYLOAD" | jq .
+          
           curl -X POST \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/${BACKEND_REPO}/dispatches" \
-            -d "{
-              \"event_type\": \"firmware-built\",
-              \"client_payload\": {
-                \"version\": \"$VERSION\",
-                \"short_version\": \"$SHORT_VERSION\",
-                \"build_date\": \"$BUILD_DATE\",
-                \"tag_name\": \"$TAG\",
-                \"release_url\": \"$RELEASE_URL\",
-                \"download_base_url\": \"https://github.com/${OWNER_REPO}/releases/download/${TAG}\",
-                \"boards\": $BOARDS_JSON,
-                \"branch\": \"$BRANCH\"
-              }
-            }"
+            -d "$DISPATCH_PAYLOAD"
           
           echo "✓ Backend benachrichtigt für Version: $VERSION"
