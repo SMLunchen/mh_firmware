@@ -17,7 +17,7 @@ jobs:
       CONFIG_SRC: my-userprefs.jsonc
       CONFIG_DEST: userPrefs.jsonc
       OWNER_REPO: ${{ github.repository }}
-      BACKEND_REPO: "dein-username/flasher-backend"  # ANPASSEN!
+      BACKEND_REPO: "SMLunchen/mh_flasher_backend" 
       
     steps:
       # Deine bestehenden Steps...
