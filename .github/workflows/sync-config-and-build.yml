@@ -11,7 +11,7 @@ on:
       boards:
         description: 'Boards to build'
         required: false
-        default: "heltec-v3 heltec-wireless-tracker-V1-0"
+        default: "heltec-v3 heltec-wireless-tracker-V1-0 rak4631"
         type: string
   push:
     tags:
