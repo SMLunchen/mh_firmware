@@ -16,19 +16,22 @@ on:
   push:
     tags:
       - 'v*'  # Automatisch bei neuen Version-Tags
+
 permissions:
   contents: write
+
 jobs:
   sync_build:
     runs-on: ubuntu-latest
     env:
       BRANCH: develop
       DOCKER_IMAGE: infinitecoding/platformio-for-ci:latest
-      BOARDS: ${{ github.event.inputs.boards || 'heltec-v3 heltec-wireless-tracker-V1-0 rak4631 heltec-wireless-tracker heltec-v4' }}
+      BOARDS: ${{ github.event.inputs.boards || 'heltec-v3 heltec-wireless-tracker-V1-0' }}
       CONFIG_SRC: my-userprefs.jsonc
       CONFIG_DEST: userPrefs.jsonc
       OWNER_REPO: ${{ github.repository }}
       BACKEND_REPO: "SMLunchen/mh_flasher_backend"
+      
     steps:
       - name: Bestimme Build-Target
         id: target
@@ -79,6 +82,7 @@ jobs:
           set -euo pipefail
           TARGET_REF="${{ steps.target.outputs.target_ref }}"
           IS_TAG_BUILD="${{ steps.target.outputs.is_tag_build }}"
+          
           if [ "$IS_TAG_BUILD" == "true" ]; then
             echo "🏷️ Cloning repository and checking out tag: $TARGET_REF"
             git clone "https://x-access-token:${TOKEN}@github.com/${OWNER_REPO}.git" repo
@@ -92,33 +96,6 @@ jobs:
             cd repo
             git submodule update --init --recursive
           fi
-
-      - name: my-userprefs.jsonc mit allen erforderlichen Werten
-        run: |
-          set -euo pipefail
-          cd repo
-          echo "📝 Creating complete my-userprefs.jsonc with all required values..."
-          cat > my-userprefs.jsonc << 'EOF'
-          {
-            "USERPREFS_CHANNELS_TO_WRITE": "2",
-            "USERPREFS_CHANNEL_0_DOWNLINK_ENABLED": "false",
-            "USERPREFS_CHANNEL_0_NAME": "ShortSlow",
-            "USERPREFS_CHANNEL_0_PRECISION": "14",
-            "USERPREFS_CHANNEL_0_PSK": "{ 0x01 }",
-            "USERPREFS_CHANNEL_0_UPLINK_ENABLED": "true",
-            "USERPREFS_CHANNEL_1_DOWNLINK_ENABLED": "true",
-            "USERPREFS_CHANNEL_1_NAME": "MeshHessen",
-            "USERPREFS_CHANNEL_1_PRECISION": "14",
-            "USERPREFS_CHANNEL_1_PSK": "{ 0xfa, 0xe4, 0xcc, 0x11, 0xa3, 0x91, 0xee, 0x19, 0x2a, 0x69, 0x7b, 0xfe, 0x0d, 0x13, 0x8e, 0x11, 0xde, 0x41, 0x86, 0xf0, 0x08, 0x41, 0x8f, 0xc2, 0x67, 0xf1, 0xeb, 0xe2, 0xca, 0x19, 0x70, 0xe5 }",
-            "USERPREFS_CHANNEL_1_UPLINK_ENABLED": "true",
-            "USERPREFS_CONFIG_LORA_REGION": "meshtastic_Config_LoRaConfig_RegionCode_EU_868",
-            "USERPREFS_LORACONFIG_MODEM_PRESET": "meshtastic_Config_LoRaConfig_ModemPreset_SHORT_SLOW",
-            "USERPREFS_RINGTONE_RTTTL": "24:d=32,o=5,b=565:f6,p,f6,4p,p,f6,p,f6,2p,p,b6,p,b6,p,b6,p,b6,p,b,p,b,p,b,p,b,p,b,p,b,p,b,p,b,1p.,2p.,p",
-            "USERPREFS_TZ_STRING": "tzplaceholder                                         "
-          }
-          EOF
-          echo "✅ Complete userPrefs created with all required values"
-          python3 -m json.tool my-userprefs.jsonc > /dev/null && echo "✅ Valid JSON" || echo "❌ Invalid JSON"
 
       - name: userPrefs bereitstellen
         env:
@@ -136,132 +113,225 @@ jobs:
             echo "⚠️ WARN: Weder Secret noch $CONFIG_SRC gefunden. Es wird mit Defaults gebaut."
           fi
           head -n 5 "$CONFIG_DEST" || true
-
-      - name: Debug und Fix platformio-custom.py
+          
+      - name: platformio-custom.py für alle Plattformen erweitern
         run: |
           set -euo pipefail
           cd repo
-          echo "🔍 Checking current platformio-custom.py..."
-          grep -A 5 -B 5 "user_pref_flags.*apply_user_prefs" bin/platformio-custom.py || echo "Pattern not found"
-          echo "🔧 Forceful fix of platformio-custom.py..."
-          # Backup
+          
+          # Backup des Original-Scripts
           cp bin/platformio-custom.py bin/platformio-custom.py.backup
-          # Komplett neue Version erstellen
-          python3 << 'EOF'
-          with open('bin/platformio-custom.py', 'r') as f:
-              lines = f.readlines()
-          new_lines = []
-          skip_next = False
-          in_userprefs_block = False
-          for i, line in enumerate(lines):
-              # Finde die user_pref_flags Zuweisung
-              if 'user_pref_flags = apply_user_prefs()' in line:
-                  # Ersetze mit Platform-Check
-                  new_lines.append('# Only apply userPrefs for ESP32 - nRF52 gets them via PLATFORMIO_BUILD_FLAGS\n')
-                  new_lines.append('if platform.name == "espressif32":\n')
-                  new_lines.append('    user_pref_flags = apply_user_prefs()\n')
-                  new_lines.append('    print(f"Applied {len(user_pref_flags)} userPrefs for ESP32")\n')
-                  new_lines.append('else:\n')
-                  new_lines.append('    user_pref_flags = []\n')
-                  new_lines.append('    print(f"Skipping userPrefs for {platform.name} (handled via build flags)")\n')
-                  continue
-              new_lines.append(line)
-          with open('bin/platformio-custom.py', 'w') as f:
-              f.writelines(new_lines)
-          EOF
-          echo "✅ Fixed platformio-custom.py"
-          echo "Checking result..."
-          grep -A 10 -B 2 "Only apply userPrefs for ESP32" bin/platformio-custom.py
+          
+          # Erstelle die erweiterte Version
+          cat > bin/platformio-custom-extended.py << 'EOF'
+          #!/usr/bin/env python3
+          # trunk-ignore-all(ruff/F821)
+          # trunk-ignore-all(flake8/F821): For SConstruct imports
+          import sys
+          from os.path import join
+          import subprocess
+          import json
+          import re
+          import time
+          import os
+          from datetime import datetime
+          from readprops import readProps
+          Import("env")
+          platform = env.PioPlatform()
+          
+          def apply_user_prefs():
+              """Apply user preferences for all platforms"""
+              jsonLoc = env["PROJECT_DIR"] + "/userPrefs.jsonc"
+              if not os.path.exists(jsonLoc):
+                  print("No userPrefs.jsonc found, skipping user preferences")
+                  return []
+              
+              with open(jsonLoc) as f:
+                  jsonStr = re.sub("//.*","", f.read(), flags=re.MULTILINE)
+                  try:
+                      userPrefs = json.loads(jsonStr)
+                  except json.JSONDecodeError as e:
+                      print(f"Error parsing userPrefs.jsonc: {e}")
+                      return []
 
-      - name: Korrigierte UserPrefs Build-Flags für nRF52 (mit TZ_STRING)
-        run: |
-          set -euo pipefail
-          cd repo
-          echo "📖 Creating complete userPrefs build flags including TZ_STRING..."
-          # Verwende Python für korrekte Formatierung
-          USERPREFS_FLAGS=$(python3 << 'EOF'
-          import shlex
-          # Definiere userPrefs mit korrekter Syntax
-          flags = []
-          # Channels
-          flags.append('-DUSERPREFS_CHANNELS_TO_WRITE=2')
-          # Channel 0
-          flags.append('-DUSERPREFS_CHANNEL_0_DOWNLINK_ENABLED=false')
-          flags.append('-DUSERPREFS_CHANNEL_0_NAME="ShortSlow"')
-          flags.append('-DUSERPREFS_CHANNEL_0_PRECISION=14')
-          flags.append('-DUSERPREFS_CHANNEL_0_PSK={0x01}')  # Kein String!
-          flags.append('-DUSERPREFS_CHANNEL_0_UPLINK_ENABLED=true')
-          # Channel 1  
-          flags.append('-DUSERPREFS_CHANNEL_1_DOWNLINK_ENABLED=true')
-          flags.append('-DUSERPREFS_CHANNEL_1_NAME="MeshHessen"')
-          flags.append('-DUSERPREFS_CHANNEL_1_PRECISION=14')
-          flags.append('-DUSERPREFS_CHANNEL_1_PSK={0xfa,0xe4,0xcc,0x11,0xa3,0x91,0xee,0x19,0x2a,0x69,0x7b,0xfe,0x0d,0x13,0x8e,0x11,0xde,0x41,0x86,0xf0,0x08,0x41,0x8f,0xc2,0x67,0xf1,0xeb,0xe2,0xca,0x19,0x70,0xe5}')
-          flags.append('-DUSERPREFS_CHANNEL_1_UPLINK_ENABLED=true')
-          # LoRa Config
-          flags.append('-DUSERPREFS_CONFIG_LORA_REGION=meshtastic_Config_LoRaConfig_RegionCode_EU_868')
-          flags.append('-DUSERPREFS_LORACONFIG_MODEM_PRESET=meshtastic_Config_LoRaConfig_ModemPreset_SHORT_SLOW')
-          # TZ_STRING (erforderlich!)
-          flags.append('-DUSERPREFS_TZ_STRING="tzplaceholder                                         "')
-          # Ringtone
-          flags.append('-DUSERPREFS_RINGTONE_RTTTL="24:d=32,o=5,b=565:f6,p,f6,4p,p,f6,p,f6,2p,p,b6,p,b6,p,b6,p,b6,p,b,p,b,p,b,p,b,p,b,p,b,p,b,p,b,1p.,2p.,p"')
-          # Korrekte Shell-Escape für komplexe Werte
-          escaped_flags = []
+              pref_flags = []
+              # Pre-process the userPrefs
+              for pref in userPrefs:
+                  if userPrefs[pref].startswith("{"):
+                      pref_flags.append("-D" + pref + "=" + userPrefs[pref])
+                  elif userPrefs[pref].lstrip("-").replace(".", "").isdigit():
+                      pref_flags.append("-D" + pref + "=" + userPrefs[pref])
+                  elif userPrefs[pref] == "true" or userPrefs[pref] == "false":
+                      pref_flags.append("-D" + pref + "=" + userPrefs[pref])
+                  elif userPrefs[pref].startswith("meshtastic_"):
+                      pref_flags.append("-D" + pref + "=" + userPrefs[pref])
+                  else:
+                      pref_flags.append("-D" + pref + "=" + env.StringifyMacro(userPrefs[pref]))
+              
+              return pref_flags
+
+          def esp32_create_combined_bin(source, target, env):
+              # this sub is borrowed from ESPEasy build toolchain. It's licensed under GPL V3
+              # https://github.com/letscontrolit/ESPEasy/blob/mega/tools/pio/post_esp32.py
+              print("Generating combined binary for serial flashing")
+              app_offset = 0x10000
+              new_file_name = env.subst("$BUILD_DIR/${PROGNAME}.factory.bin")
+              sections = env.subst(env.get("FLASH_EXTRA_IMAGES"))
+              firmware_name = env.subst("$BUILD_DIR/${PROGNAME}.bin")
+              chip = env.get("BOARD_MCU")
+              flash_size = env.BoardConfig().get("upload.flash_size")
+              flash_freq = env.BoardConfig().get("build.f_flash", "40m")
+              flash_freq = flash_freq.replace("000000L", "m")
+              flash_mode = env.BoardConfig().get("build.flash_mode", "dio")
+              memory_type = env.BoardConfig().get("build.arduino.memory_type", "qio_qspi")
+              if flash_mode == "qio" or flash_mode == "qout":
+                  flash_mode = "dio"
+              if memory_type == "opi_opi" or memory_type == "opi_qspi":
+                  flash_mode = "dout"
+              cmd = [
+                  "--chip",
+                  chip,
+                  "merge_bin",
+                  "-o",
+                  new_file_name,
+                  "--flash_mode",
+                  flash_mode,
+                  "--flash_freq",
+                  flash_freq,
+                  "--flash_size",
+                  flash_size,
+              ]
+              print("    Offset | File")
+              for section in sections:
+                  sect_adr, sect_file = section.split(" ", 1)
+                  print(f" -  {sect_adr} | {sect_file}")
+                  cmd += [sect_adr, sect_file]
+              print(f" - {hex(app_offset)} | {firmware_name}")
+              cmd += [hex(app_offset), firmware_name]
+              print("Using esptool.py arguments: %s" % " ".join(cmd))
+              esptool.main(cmd)
+
+          if platform.name == "espressif32":
+              sys.path.append(join(platform.get_package_dir("tool-esptoolpy")))
+              import esptool
+              env.AddPostAction("$BUILD_DIR/${PROGNAME}.bin", esp32_create_combined_bin)
+              esp32_kind = env.GetProjectOption("custom_esp32_kind")
+              if esp32_kind == "esp32":
+                  # Free up some IRAM by removing auxiliary SPI flash chip drivers.
+                  # Wrapped stub symbols are defined in src/platform/esp32/iram-quirk.c.
+                  env.Append(
+                      LINKFLAGS=[
+                          "-Wl,--wrap=esp_flash_chip_gd",
+                          "-Wl,--wrap=esp_flash_chip_issi",
+                          "-Wl,--wrap=esp_flash_chip_winbond",
+                      ]
+                  )
+              else:
+                  # For newer ESP32 targets, using newlib nano works better.
+                  env.Append(LINKFLAGS=["--specs=nano.specs", "-u", "_printf_float"])
+
+          if platform.name == "nordicnrf52":
+              env.AddPostAction("$BUILD_DIR/${PROGNAME}.hex",
+                                env.VerboseAction(f"\"{sys.executable}\" ./bin/uf2conv.py \"$BUILD_DIR/firmware.hex\" -c -f 0xADA52840 -o \"$BUILD_DIR/firmware.uf2\"",
+                                                  "Generating UF2 file"))
+
+          Import("projenv")
+          prefsLoc = projenv["PROJECT_DIR"] + "/version.properties"
+          verObj = readProps(prefsLoc)
+          print("Using meshtastic platformio-custom.py, firmware version " + verObj["long"] + " on " + env.get("PIOENV"))
+
+          # get repository owner if git is installed
+          try:
+              r_owner = (
+                  subprocess.check_output(["git", "config", "--get", "remote.origin.url"])
+                  .decode("utf-8")
+                  .strip().split("/")
+              )
+              repo_owner = r_owner[-2] + "/" + r_owner[-1].replace(".git", "")
+          except subprocess.CalledProcessError:
+              repo_owner = "unknown"
+
+          # Load user preferences for ALL platforms
+          user_pref_flags = apply_user_prefs()
+
+          # Calculate unix epoch for current day (midnight)
+          current_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+          build_epoch = int(current_date.timestamp())
+
+          flags = [
+                  "-DAPP_VERSION=" + verObj["long"],
+                  "-DAPP_VERSION_SHORT=" + verObj["short"],
+                  "-DAPP_ENV=" + env.get("PIOENV"),
+                  "-DAPP_REPO=" + repo_owner,
+                  "-DBUILD_EPOCH=" + str(build_epoch),
+              ] + user_pref_flags
+
+          print ("Using flags:")
           for flag in flags:
-              # Für Shell-Sicherheit escapen
-              escaped_flags.append(shlex.quote(flag))
-          print(' '.join(escaped_flags))
-          EOF
+              print(flag)
+
+          projenv.Append(
+              CCFLAGS=flags,
           )
-          if [ -n "$USERPREFS_FLAGS" ]; then
-              echo "USERPREFS_BUILD_FLAGS=$USERPREFS_FLAGS" >> $GITHUB_ENV
-              echo "✅ UserPrefs flags generated with proper syntax"
-              echo "Added TZ_STRING and RINGTONE_RTTTL (required by code)"
-              echo "Preview: ${USERPREFS_FLAGS:0:300}..."
-          else
-              echo "❌ Failed to generate userPrefs flags"
-              exit 1
-          fi
+
+          for lb in env.GetLibBuilders():
+              if lb.name == "meshtastic-device-ui":
+                  lb.env.Append(CPPDEFINES=[("APP_VERSION", verObj["long"])])
+                  break
+
+          # Get the display resolution from macros
+          def get_display_resolution(build_flags):
+              # Check "DISPLAY_SIZE" to determine the screen resolution
+              for flag in build_flags:
+                  if isinstance(flag, tuple) and flag[0] == "DISPLAY_SIZE":
+                      screen_width, screen_height = map(int, flag[1].split("x"))
+                      return screen_width, screen_height
+              print("No screen resolution defined in build_flags. Please define DISPLAY_SIZE.")
+              exit(1)
+
+          def load_boot_logo(source, target, env):
+              build_flags = env.get("CPPDEFINES", [])
+              logo_w, logo_h = get_display_resolution(build_flags)
+              print(f"TFT build with {logo_w}x{logo_h} resolution detected")
+              # Load the boot logo from `branding/logo_<width>x<height>.png` if it exists
+              source_path = join(env["PROJECT_DIR"], "branding", f"logo_{logo_w}x{logo_h}.png")
+              dest_dir = join(env["PROJECT_DIR"], "data", "boot")
+              dest_path = join(dest_dir, "logo.png")
+              if env.File(source_path).exists():
+                  print(f"Loading boot logo from {source_path}")
+                  # Prepare the destination
+                  env.Execute(f"mkdir -p {dest_dir} && rm -f {dest_path}")
+                  # Copy the logo to the `data/boot` directory
+                  env.Execute(f"cp {source_path} {dest_path}")
+
+          # Load the boot logo on TFT builds
+          if ("HAS_TFT", 1) in env.get("CPPDEFINES", []):
+              env.AddPreAction('$BUILD_DIR/littlefs.bin', load_boot_logo)
+          EOF
+          
+          # Ersetze das Original-Script
+          mv bin/platformio-custom-extended.py bin/platformio-custom.py
+          chmod +x bin/platformio-custom.py
+          
+          echo "✅ platformio-custom.py wurde für alle Plattformen erweitert"
 
       - name: Docker Image ziehen
         run: |
           set -euo pipefail
           docker pull "$DOCKER_IMAGE"
 
-      - name: Build (PlatformIO im Docker mit korrigierten userPrefs)
-        env:
-          USERPREFS_BUILD_FLAGS: ${{ env.USERPREFS_BUILD_FLAGS }}
+      - name: Build (PlatformIO im Docker)
         run: |
           set -euo pipefail
           cd repo
           mkdir -p .pio
-          echo "=== 🔧 Build Configuration ==="
-          echo "Boards to build: $BOARDS"
-          echo "UserPrefs flags loaded: $(echo $USERPREFS_BUILD_FLAGS | wc -w) flags"
           for b in $BOARDS; do
-            echo "🔨 Building $b..."
-            # Für nRF52 Boards: Spezielle Build-Chain mit userPrefs
-            if [[ "$b" =~ rak4631|nrf52|rak4631_eink ]]; then
-              echo "🔧 nRF52 build detected - using build-nrf52.sh with userPrefs"
-              echo "PLATFORMIO_BUILD_FLAGS being passed: $(echo $USERPREFS_BUILD_FLAGS | wc -w) flags"
-              # Zeige erste paar Flags zur Verifikation
-              if [ -n "$USERPREFS_BUILD_FLAGS" ]; then
-                echo "Sample flags: $(echo $USERPREFS_BUILD_FLAGS | cut -d' ' -f1-3)..."
-              fi
-              docker run --rm \
-                -v "$PWD:/workspace" \
-                -w /workspace \
-                -e PLATFORMIO_BUILD_FLAGS="$USERPREFS_BUILD_FLAGS" \
-                "$DOCKER_IMAGE" \
-                bash -lc "./bin/build-nrf52.sh $b"
-            else
-              echo "🔧 Standard ESP32 build (userPrefs via platformio-custom.py)"
-              docker run --rm \
-                -v "$PWD:/workspace" \
-                -w /workspace \
-                "$DOCKER_IMAGE" \
-                bash -lc "platformio run -e $b"
-            fi
-            echo "✅ Build completed for $b"
+            echo "🔨 Build $b..."
+            docker run --rm \
+              -v "$PWD:/workspace" \
+              -w /workspace \
+              "$DOCKER_IMAGE" \
+              bash -lc "platformio run -e $b"
           done
 
       - name: Versionsnummer bestimmen
@@ -269,19 +339,23 @@ jobs:
         run: |
           set -euo pipefail
           cd repo
+          
           MESHTASTIC_VERSION=""
           IS_TAG_BUILD="${{ steps.target.outputs.is_tag_build }}"
           TARGET_REF="${{ steps.target.outputs.target_ref }}"
           BUILD_TYPE="${{ steps.target.outputs.build_type }}"
+          
           echo "=== 🏷️ Git Tag Detection ==="
           echo "Build Type: $BUILD_TYPE"
           echo "Is Tag Build: $IS_TAG_BUILD"
           echo "Target Ref: $TARGET_REF"
+          
           # Für Tag-Builds: Verwende den Tag direkt
           if [ "$IS_TAG_BUILD" == "true" ] && [[ "$TARGET_REF" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+.*) ]]; then
             MESHTASTIC_VERSION="${BASH_REMATCH[1]}"
             echo "✅ Using specified tag version: $MESHTASTIC_VERSION"
           fi
+          
           # Fallback-Methoden für develop builds
           if [ -z "$MESHTASTIC_VERSION" ]; then
             CURRENT_TAG=$(git describe --exact-match --tags HEAD 2>/dev/null || echo "")
@@ -290,6 +364,7 @@ jobs:
               MESHTASTIC_VERSION="${CURRENT_TAG#v}"
             fi
           fi
+          
           if [ -z "$MESHTASTIC_VERSION" ]; then
             LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
             if [ -n "$LATEST_TAG" ]; then
@@ -297,6 +372,7 @@ jobs:
               MESHTASTIC_VERSION="${LATEST_TAG#v}"
             fi
           fi
+          
           if [ -z "$MESHTASTIC_VERSION" ]; then
             echo "📋 Available tags:"
             git tag --sort=-version:refname | head -10 || true
@@ -306,6 +382,7 @@ jobs:
               MESHTASTIC_VERSION="${LATEST_TAG#v}"
             fi
           fi
+          
           # Source-Code Fallback
           if [ -z "$MESHTASTIC_VERSION" ]; then
             echo "🔍 Trying to extract version from source files..."
@@ -321,14 +398,17 @@ jobs:
               fi
             done
           fi
+          
           # Final Fallback
           if [ -z "$MESHTASTIC_VERSION" ]; then
             MESHTASTIC_VERSION="2.7.12"
             echo "⚠️ Using fallback version: $MESHTASTIC_VERSION"
           fi
+          
           # Git-Info
           GIT_HASH=$(git rev-parse --short HEAD)
           TS=$(date -u +%Y%m%d-%H%M%S)
+          
           # Versionen je nach Build-Typ
           if [ "$IS_TAG_BUILD" == "true" ]; then
             # Für Tags: Saubere Version ohne Timestamp
@@ -343,6 +423,7 @@ jobs:
             DISPLAY_VERSION="${MESHTASTIC_VERSION}-MH-dev"
             echo "🔄 Develop build - timestamped versioning"
           fi
+          
           echo "base_version=$MESHTASTIC_VERSION" >> $GITHUB_OUTPUT
           echo "version=$FULL_VERSION" >> $GITHUB_OUTPUT
           echo "short_version=$SHORT_VERSION" >> $GITHUB_OUTPUT
@@ -350,6 +431,7 @@ jobs:
           echo "timestamp=$TS" >> $GITHUB_OUTPUT
           echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
           echo "build_type=$BUILD_TYPE" >> $GITHUB_OUTPUT
+          
           echo "=== 📋 Final Version Info ==="
           echo "Meshtastic Base: $MESHTASTIC_VERSION"
           echo "Full Version: $FULL_VERSION"
@@ -357,17 +439,21 @@ jobs:
           echo "Display Version: $DISPLAY_VERSION"
           echo "Build Type: $BUILD_TYPE"
 
+      # Rest der Steps bleiben gleich...
       - name: Firmware einsammeln und strukturieren
         id: firmware
         run: |
           set -euo pipefail
           mkdir -p firmware-output
           cd repo
+          
           VERSION="${{ steps.version.outputs.version }}"
           COLLECTED_BOARDS=""
+          
           for b in $BOARDS; do
             echo "📦 Sammle Firmware für Board: $b"
             BOARD_FILES=""
+            
             # Suche nach Firmware-Dateien in verschiedenen Varianten
             for variant in "" "-factory" "-update" "-ota"; do
               for ext in bin uf2 hex; do
@@ -376,6 +462,7 @@ jobs:
                   ".pio/build/$b/firmware.$ext"
                   "build_output/$b/firmware${variant}.$ext"
                 )
+                
                 for f in "${possible_files[@]}"; do
                   if [ -f "$f" ]; then
                     target_name="firmware-${b}${variant}-${VERSION}.$ext"
@@ -387,6 +474,7 @@ jobs:
                 done
               done
             done
+            
             # Fallback: Wenn keine Varianten gefunden, suche nach generischen Dateien
             if [ -z "$BOARD_FILES" ]; then
               for ext in bin uf2 hex; do
@@ -396,23 +484,28 @@ jobs:
                   cp "$f" "../firmware-output/$target_name"
                   echo "✅ Kopiert (generic): $f -> $target_name"
                   BOARD_FILES="$BOARD_FILES $target_name"
+                  
                   # Erstelle zusätzliche Varianten
                   cp "$f" "../firmware-output/firmware-${b}-factory-${VERSION}.$ext"
                   cp "$f" "../firmware-output/firmware-${b}-update-${VERSION}.$ext"
                 fi
               done
             fi
+            
             if [ -n "$BOARD_FILES" ]; then
               COLLECTED_BOARDS="$COLLECTED_BOARDS $b"
             else
               echo "⚠️ WARNUNG: Keine Firmware für Board $b gefunden"
             fi
           done
+          
           cd ..
           echo "collected_boards=$COLLECTED_BOARDS" >> $GITHUB_OUTPUT
+          
           echo "=== 📦 Gesammelte Firmware-Dateien ==="
           ls -lah firmware-output/ || true
 
+      # Rest deiner Steps bleibt unverändert...
       - name: Release erstellen
         id: release
         if: steps.firmware.outputs.collected_boards != ''
@@ -426,25 +519,31 @@ jobs:
           TAG="firmware-${VERSION}"
           NAME="Firmware Build ${VERSION}"
           API="https://api.github.com/repos/${OWNER_REPO}"
+          
           # Release body erstellen
           cat > release_body.md << EOF
           # 🚀 Automatischer Firmware Build
+          
           **Version:** ${VERSION}  
           **Build-Datum:** ${BUILD_DATE}  
           **Build-Typ:** ${BUILD_TYPE}  
           **Boards:** ${{ steps.firmware.outputs.collected_boards }}
+          
           ## 🔧 Änderungen
           - Automatischer Sync mit Upstream
           - Custom userPrefs angewendet
           - Für folgende Hardware gebaut: ${{ steps.firmware.outputs.collected_boards }}
+          
           ## 📱 Installation
           Verwende den [Web Flasher](https://flasher.schwarzes-seelenreich.de) für einfache Installation.
           EOF
+          
           # jq installieren falls nicht vorhanden
           if ! command -v jq >/dev/null 2>&1; then
             sudo apt-get update -y
             sudo apt-get install -y jq
           fi
+          
           # Release erstellen
           http=$(curl -sS -L -w "%{http_code}" -o resp.json \
             -X POST \
@@ -459,7 +558,9 @@ jobs:
               \"draft\":false,
               \"prerelease\":true
             }")
+          
           echo "Create release HTTP: $http"
+          
           if [ "$http" -eq 422 ]; then
             echo "Release bereits vorhanden, lade bestehende..."
             curl -sS -L \
@@ -471,9 +572,11 @@ jobs:
             cat resp.json
             exit 1
           fi
+          
           # Upload URL extrahieren
           upload_url=$(jq -r '.upload_url | sub("\\{.*$"; "")' resp.json)
           release_id=$(jq -r '.id' resp.json)
+          
           echo "upload_url=$upload_url" >> $GITHUB_OUTPUT
           echo "release_id=$release_id" >> $GITHUB_OUTPUT
           echo "tag_name=$TAG" >> $GITHUB_OUTPUT
@@ -485,10 +588,12 @@ jobs:
         run: |
           set -euo pipefail
           upload_url="${{ steps.release.outputs.upload_url }}"
+          
           shopt -s nullglob
           for path in firmware-output/*; do
             [ -f "$path" ] || continue
             name=$(basename "$path")
+            
             echo "📤 Upload: $name"
             http=$(curl -sS -L -w "%{http_code}" -o /dev/null \
               -X POST \
@@ -497,6 +602,7 @@ jobs:
               -H "Content-Type: application/octet-stream" \
               "${upload_url}?name=${name}" \
               --data-binary @"$path")
+            
             if [ "$http" -ge 400 ]; then
               echo "❌ FEHLER beim Upload von $name (HTTP $http)"
               exit 1
@@ -511,6 +617,7 @@ jobs:
           GH_TOKEN: ${{ secrets.BACKEND_REPO_TOKEN }}
         run: |
           set -euo pipefail
+          
           VERSION="${{ steps.version.outputs.version }}"
           SHORT_VERSION="${{ steps.version.outputs.short_version }}"
           BUILD_DATE="${{ steps.version.outputs.build_date }}"
@@ -519,13 +626,16 @@ jobs:
           DISPLAY_VERSION="${{ steps.version.outputs.display_version }}"
           BASE_VERSION="${{ steps.version.outputs.base_version }}"
           BUILD_TYPE="${{ steps.version.outputs.build_type }}"
+          
           # Boards-Array für JSON erstellen
           BOARDS_RAW="${{ steps.firmware.outputs.collected_boards }}"
           echo "Raw boards: '$BOARDS_RAW'"
+          
           BOARDS_JSON="[]"
           if [ -n "$BOARDS_RAW" ]; then
             BOARDS_JSON=$(echo "$BOARDS_RAW" | jq -R 'split(" ") | map(select(. != ""))')
           fi
+          
           echo "=== 📡 Backend Notification Debug ==="
           echo "Version: $VERSION"
           echo "Short Version: $SHORT_VERSION"
@@ -533,6 +643,7 @@ jobs:
           echo "Build Type: $BUILD_TYPE"
           echo "Download Base URL: https://github.com/${OWNER_REPO}/releases/download/${TAG}"
           echo "Boards JSON: $BOARDS_JSON"
+          
           DISPATCH_PAYLOAD="{
             \"event_type\": \"firmware-built\",
             \"client_payload\": {
@@ -549,12 +660,15 @@ jobs:
               \"branch\": \"$BRANCH\"
             }
           }"
+          
           echo "Dispatch payload:"
           echo "$DISPATCH_PAYLOAD" | jq .
+          
           curl -X POST \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/${BACKEND_REPO}/dispatches" \
             -d "$DISPATCH_PAYLOAD"
+          
           echo "✅ Backend benachrichtigt für Version: $VERSION"
