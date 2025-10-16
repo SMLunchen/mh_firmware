@@ -356,30 +356,54 @@ jobs:
           set -euo pipefail
           docker pull "$DOCKER_IMAGE"
 
-      - name: UserPrefs nur für wichtige Settings
+      - name: UserPrefs mit Python (sichere Quotes)
         run: |
           set -euo pipefail
           cd repo
           
-          echo "📖 Setting essential userPrefs for nRF52..."
+          echo "📖 Generating userPrefs with Python (safe quoting)..."
           
-          # Nur die essentiellen Settings ohne problematische Werte
-          ESSENTIAL_FLAGS="-DUSERPREFS_CHANNELS_TO_WRITE=2"
-          ESSENTIAL_FLAGS="$ESSENTIAL_FLAGS -DUSERPREFS_CHANNEL_0_NAME=ShortSlow"
-          ESSENTIAL_FLAGS="$ESSENTIAL_FLAGS -DUSERPREFS_CHANNEL_1_NAME=MeshHessen"
-          ESSENTIAL_FLAGS="$ESSENTIAL_FLAGS -DUSERPREFS_CONFIG_LORA_REGION=meshtastic_Config_LoRaConfig_RegionCode_EU_868"
-          ESSENTIAL_FLAGS="$ESSENTIAL_FLAGS -DUSERPREFS_LORACONFIG_MODEM_PRESET=meshtastic_Config_LoRaConfig_ModemPreset_SHORT_SLOW"
-          ESSENTIAL_FLAGS="$ESSENTIAL_FLAGS -DUSERPREFS_CHANNEL_0_PSK=\"{ 0x01 }\""
-          ESSENTIAL_FLAGS="$ESSENTIAL_FLAGS -DUSERPREFS_CHANNEL_1_PSK=\"{ 0xfa, 0xe4, 0xcc, 0x11, 0xa3, 0x91, 0xee, 0x19, 0x2a, 0x69, 0x7b, 0xfe, 0x0d, 0x13, 0x8e, 0x11, 0xde, 0x41, 0x86, 0xf0, 0x08, 0x41, 0x8f, 0xc2, 0x67, 0xf1, 0xeb, 0xe2, 0xca, 0x19, 0x70, 0xe5 }\""
-          ESSENTIAL_FLAGS="$ESSENTIAL_FLAGS -DUSERPREFS_CHANNEL_0_UPLINK_ENABLED=true"
-          ESSENTIAL_FLAGS="$ESSENTIAL_FLAGS -DUSERPREFS_CHANNEL_1_UPLINK_ENABLED=true"
-          ESSENTIAL_FLAGS="$ESSENTIAL_FLAGS -DUSERPREFS_CHANNEL_0_DOWNLINK_ENABLED=false"
-          ESSENTIAL_FLAGS="$ESSENTIAL_FLAGS -DUSERPREFS_CHANNEL_1_DOWNLINK_ENABLED=true"
+          USERPREFS_FLAGS=$(python3 << 'EOF'
+          # Definiere die userPrefs als Dictionary
+          userprefs = {
+              "USERPREFS_CHANNELS_TO_WRITE": "2",
+              "USERPREFS_CHANNEL_0_DOWNLINK_ENABLED": "false",
+              "USERPREFS_CHANNEL_0_NAME": "ShortSlow",
+              "USERPREFS_CHANNEL_0_PRECISION": "14",
+              "USERPREFS_CHANNEL_0_PSK": "{ 0x01 }",
+              "USERPREFS_CHANNEL_0_UPLINK_ENABLED": "true",
+              "USERPREFS_CHANNEL_1_DOWNLINK_ENABLED": "true",
+              "USERPREFS_CHANNEL_1_NAME": "MeshHessen",
+              "USERPREFS_CHANNEL_1_PRECISION": "14",
+              "USERPREFS_CHANNEL_1_PSK": "{ 0xfa, 0xe4, 0xcc, 0x11, 0xa3, 0x91, 0xee, 0x19, 0x2a, 0x69, 0x7b, 0xfe, 0x0d, 0x13, 0x8e, 0x11, 0xde, 0x41, 0x86, 0xf0, 0x08, 0x41, 0x8f, 0xc2, 0x67, 0xf1, 0xeb, 0xe2, 0xca, 0x19, 0x70, 0xe5 }",
+              "USERPREFS_CHANNEL_1_UPLINK_ENABLED": "true",
+              "USERPREFS_CONFIG_LORA_REGION": "meshtastic_Config_LoRaConfig_RegionCode_EU_868",
+              "USERPREFS_LORACONFIG_MODEM_PRESET": "meshtastic_Config_LoRaConfig_ModemPreset_SHORT_SLOW"
+          }
           
-          echo "USERPREFS_BUILD_FLAGS=$ESSENTIAL_FLAGS" >> $GITHUB_ENV
+          # Konvertiere zu Build-Flags mit korrekten Quotes
+          flags = []
+          for key, value in userprefs.items():
+              # String-Werte brauchen Anführungszeichen
+              if value.startswith("{") or value.startswith("meshtastic_") or value in ["true", "false"] or value.isdigit():
+                  # Array, Enum oder Boolean/Number - keine zusätzlichen Quotes
+                  flags.append(f"-D{key}={value}")
+              else:
+                  # String-Wert - mit Anführungszeichen
+                  flags.append(f'-D{key}="{value}"')
           
-          echo "✅ Essential userPrefs flags set (without problematic logo/text)"
-          echo "Flags: $ESSENTIAL_FLAGS"
+          print(" ".join(flags))
+          EOF
+          )
+          
+          if [ -n "$USERPREFS_FLAGS" ]; then
+              echo "USERPREFS_BUILD_FLAGS=$USERPREFS_FLAGS" >> $GITHUB_ENV
+              echo "✅ UserPrefs flags generated with Python"
+              echo "Sample output: ${USERPREFS_FLAGS:0:200}..."
+          else
+              echo "❌ Failed to generate userPrefs flags"
+              exit 1
+          fi
 
       - name: Build (PlatformIO im Docker mit userPrefs)
         env:
