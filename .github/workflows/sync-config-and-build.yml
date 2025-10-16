@@ -315,7 +315,7 @@ jobs:
           
           echo "✅ platformio-custom.py wurde für alle Plattformen erweitert"
 #test!
-- name: Build-Flags aus userPrefs.jsonc generieren
+      - name: Build-Flags aus userPrefs.jsonc generieren
         id: build_flags
         run: |
           set -euo pipefail
