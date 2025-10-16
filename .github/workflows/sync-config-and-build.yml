@@ -93,11 +93,11 @@ jobs:
             git submodule update --init --recursive
           fi
 
-      - name: my-userprefs.jsonc erstellen (ohne problematische Werte)
+      - name: my-userprefs.jsonc mit allen erforderlichen Werten
         run: |
           set -euo pipefail
           cd repo
-          echo "📝 Creating clean my-userprefs.jsonc..."
+          echo "📝 Creating complete my-userprefs.jsonc with all required values..."
           cat > my-userprefs.jsonc << 'EOF'
           {
             "USERPREFS_CHANNELS_TO_WRITE": "2",
@@ -112,10 +112,12 @@ jobs:
             "USERPREFS_CHANNEL_1_PSK": "{ 0xfa, 0xe4, 0xcc, 0x11, 0xa3, 0x91, 0xee, 0x19, 0x2a, 0x69, 0x7b, 0xfe, 0x0d, 0x13, 0x8e, 0x11, 0xde, 0x41, 0x86, 0xf0, 0x08, 0x41, 0x8f, 0xc2, 0x67, 0xf1, 0xeb, 0xe2, 0xca, 0x19, 0x70, 0xe5 }",
             "USERPREFS_CHANNEL_1_UPLINK_ENABLED": "true",
             "USERPREFS_CONFIG_LORA_REGION": "meshtastic_Config_LoRaConfig_RegionCode_EU_868",
-            "USERPREFS_LORACONFIG_MODEM_PRESET": "meshtastic_Config_LoRaConfig_ModemPreset_SHORT_SLOW"
+            "USERPREFS_LORACONFIG_MODEM_PRESET": "meshtastic_Config_LoRaConfig_ModemPreset_SHORT_SLOW",
+            "USERPREFS_RINGTONE_RTTTL": "24:d=32,o=5,b=565:f6,p,f6,4p,p,f6,p,f6,2p,p,b6,p,b6,p,b6,p,b6,p,b,p,b,p,b,p,b,p,b,p,b,p,b,p,b,1p.,2p.,p",
+            "USERPREFS_TZ_STRING": "tzplaceholder                                         "
           }
           EOF
-          echo "✅ Clean userPrefs created (no OEM logo/text to avoid build errors)"
+          echo "✅ Complete userPrefs created with all required values"
           python3 -m json.tool my-userprefs.jsonc > /dev/null && echo "✅ Valid JSON" || echo "❌ Invalid JSON"
 
       - name: userPrefs bereitstellen
@@ -135,38 +137,47 @@ jobs:
           fi
           head -n 5 "$CONFIG_DEST" || true
 
-      - name: Stoppe doppelte userPrefs Definitionen
+      - name: Debug und Fix platformio-custom.py
         run: |
           set -euo pipefail
           cd repo
-          echo "🔧 Preventing double userPrefs definitions..."
+          echo "🔍 Checking current platformio-custom.py..."
+          grep -A 5 -B 5 "user_pref_flags.*apply_user_prefs" bin/platformio-custom.py || echo "Pattern not found"
+          echo "🔧 Forceful fix of platformio-custom.py..."
           # Backup
           cp bin/platformio-custom.py bin/platformio-custom.py.backup
-          # Entferne userPrefs komplett aus platformio-custom.py für nRF52
+          # Komplett neue Version erstellen
           python3 << 'EOF'
           with open('bin/platformio-custom.py', 'r') as f:
-              content = f.read()
-          # Ersetze die userPrefs Logik mit einer Platform-Check
-          new_content = content.replace(
-              'user_pref_flags = apply_user_prefs()',
-              '''# Only apply userPrefs for ESP32 - nRF52 gets them via PLATFORMIO_BUILD_FLAGS
-          if platform.name == "espressif32":
-              user_pref_flags = apply_user_prefs()
-              print(f"Applied {len(user_pref_flags)} userPrefs for ESP32")
-          else:
-              user_pref_flags = []
-              print(f"Skipping userPrefs for {platform.name} (handled via build flags)")'''
-          )
+              lines = f.readlines()
+          new_lines = []
+          skip_next = False
+          in_userprefs_block = False
+          for i, line in enumerate(lines):
+              # Finde die user_pref_flags Zuweisung
+              if 'user_pref_flags = apply_user_prefs()' in line:
+                  # Ersetze mit Platform-Check
+                  new_lines.append('# Only apply userPrefs for ESP32 - nRF52 gets them via PLATFORMIO_BUILD_FLAGS\n')
+                  new_lines.append('if platform.name == "espressif32":\n')
+                  new_lines.append('    user_pref_flags = apply_user_prefs()\n')
+                  new_lines.append('    print(f"Applied {len(user_pref_flags)} userPrefs for ESP32")\n')
+                  new_lines.append('else:\n')
+                  new_lines.append('    user_pref_flags = []\n')
+                  new_lines.append('    print(f"Skipping userPrefs for {platform.name} (handled via build flags)")\n')
+                  continue
+              new_lines.append(line)
           with open('bin/platformio-custom.py', 'w') as f:
-              f.write(new_content)
+              f.writelines(new_lines)
           EOF
-          echo "✅ Fixed double definitions - userPrefs now only for ESP32"
+          echo "✅ Fixed platformio-custom.py"
+          echo "Checking result..."
+          grep -A 10 -B 2 "Only apply userPrefs for ESP32" bin/platformio-custom.py
 
-      - name: Korrigierte UserPrefs Build-Flags für nRF52
+      - name: Korrigierte UserPrefs Build-Flags für nRF52 (mit TZ_STRING)
         run: |
           set -euo pipefail
           cd repo
-          echo "📖 Creating properly formatted userPrefs build flags..."
+          echo "📖 Creating complete userPrefs build flags including TZ_STRING..."
           # Verwende Python für korrekte Formatierung
           USERPREFS_FLAGS=$(python3 << 'EOF'
           import shlex
@@ -189,6 +200,10 @@ jobs:
           # LoRa Config
           flags.append('-DUSERPREFS_CONFIG_LORA_REGION=meshtastic_Config_LoRaConfig_RegionCode_EU_868')
           flags.append('-DUSERPREFS_LORACONFIG_MODEM_PRESET=meshtastic_Config_LoRaConfig_ModemPreset_SHORT_SLOW')
+          # TZ_STRING (erforderlich!)
+          flags.append('-DUSERPREFS_TZ_STRING="tzplaceholder                                         "')
+          # Ringtone
+          flags.append('-DUSERPREFS_RINGTONE_RTTTL="24:d=32,o=5,b=565:f6,p,f6,4p,p,f6,p,f6,2p,p,b6,p,b6,p,b6,p,b6,p,b,p,b,p,b,p,b,p,b,p,b,p,b,p,b,1p.,2p.,p"')
           # Korrekte Shell-Escape für komplexe Werte
           escaped_flags = []
           for flag in flags:
@@ -200,11 +215,8 @@ jobs:
           if [ -n "$USERPREFS_FLAGS" ]; then
               echo "USERPREFS_BUILD_FLAGS=$USERPREFS_FLAGS" >> $GITHUB_ENV
               echo "✅ UserPrefs flags generated with proper syntax"
-              echo "Key changes:"
-              echo "  - PSK as C arrays: {0x01} not \"{ 0x01 }\""
-              echo "  - Names as strings: \"ShortSlow\" not ShortSlow"
-              echo "  - No spaces in arrays: {0xfa,0xe4...} not { 0xfa, 0xe4... }"
-              echo "Preview: ${USERPREFS_FLAGS:0:200}..."
+              echo "Added TZ_STRING and RINGTONE_RTTTL (required by code)"
+              echo "Preview: ${USERPREFS_FLAGS:0:300}..."
           else
               echo "❌ Failed to generate userPrefs flags"
               exit 1
