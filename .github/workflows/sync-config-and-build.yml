@@ -3,6 +3,19 @@ on:
   schedule:
     - cron: "0 3 * * *"
   workflow_dispatch:
+    inputs:
+      target_tag:
+        description: 'Specific git tag to build (leave empty for latest develop)'
+        required: false
+        type: string
+      boards:
+        description: 'Boards to build'
+        required: false
+        default: "heltec-v3 heltec-wireless-tracker-V1-0"
+        type: string
+  push:
+    tags:
+      - 'v*'  # Automatisch bei neuen Version-Tags
 
 permissions:
   contents: write
@@ -13,18 +26,41 @@ jobs:
     env:
       BRANCH: develop
       DOCKER_IMAGE: infinitecoding/platformio-for-ci:latest
-      BOARDS: "heltec-v3 heltec-wireless-tracker-V1-0"
+      BOARDS: ${{ github.event.inputs.boards || 'heltec-v3 heltec-wireless-tracker-V1-0' }}
       CONFIG_SRC: my-userprefs.jsonc
       CONFIG_DEST: userPrefs.jsonc
       OWNER_REPO: ${{ github.repository }}
       BACKEND_REPO: "SMLunchen/mh_flasher_backend"
       
     steps:
+      - name: Bestimme Build-Target
+        id: target
+        run: |
+          if [ -n "${{ github.event.inputs.target_tag }}" ]; then
+            echo "target_ref=${{ github.event.inputs.target_tag }}" >> $GITHUB_OUTPUT
+            echo "is_tag_build=true" >> $GITHUB_OUTPUT
+            echo "build_type=manual-tag" >> $GITHUB_OUTPUT
+            echo "🏷️ Building specific tag: ${{ github.event.inputs.target_tag }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG_NAME="${{ github.ref_name }}"
+            echo "target_ref=$TAG_NAME" >> $GITHUB_OUTPUT
+            echo "is_tag_build=true" >> $GITHUB_OUTPUT
+            echo "build_type=pushed-tag" >> $GITHUB_OUTPUT
+            echo "🏷️ Building pushed tag: $TAG_NAME"
+          else
+            echo "target_ref=develop" >> $GITHUB_OUTPUT
+            echo "is_tag_build=false" >> $GITHUB_OUTPUT  
+            echo "build_type=develop" >> $GITHUB_OUTPUT
+            echo "🔄 Building develop branch"
+          fi
+
       - name: Fork mit Upstream mergen
+        if: steps.target.outputs.is_tag_build == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          echo "🔄 Merging upstream changes..."
           http_code=$(curl -sS -L -w "%{http_code}" -o resp.json \
             -X POST \
             -H "Accept: application/vnd.github+json" \
@@ -34,19 +70,32 @@ jobs:
             -d "{\"branch\":\"$BRANCH\"}")
           cat resp.json
           if [ "$http_code" -eq 409 ]; then
-            echo "Merge-Konflikt. Bitte manuell lösen oder PR-Variante nutzen."
+            echo "❌ Merge-Konflikt. Bitte manuell lösen."
             exit 1
           fi
           test "$http_code" -lt 400
 
-      - name: Repo klonen (Branch)
+      - name: Repo klonen
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          git clone --depth=1 --branch "$BRANCH" "https://x-access-token:${TOKEN}@github.com/${OWNER_REPO}.git" repo
-          cd repo
-          git submodule update --init --recursive
+          TARGET_REF="${{ steps.target.outputs.target_ref }}"
+          IS_TAG_BUILD="${{ steps.target.outputs.is_tag_build }}"
+          
+          if [ "$IS_TAG_BUILD" == "true" ]; then
+            echo "🏷️ Cloning repository and checking out tag: $TARGET_REF"
+            git clone "https://x-access-token:${TOKEN}@github.com/${OWNER_REPO}.git" repo
+            cd repo
+            git fetch --tags
+            git checkout "tags/$TARGET_REF"
+            git submodule update --init --recursive
+          else
+            echo "🔄 Cloning develop branch"
+            git clone --depth=1 --branch "$BRANCH" "https://x-access-token:${TOKEN}@github.com/${OWNER_REPO}.git" repo
+            cd repo
+            git submodule update --init --recursive
+          fi
 
       - name: userPrefs bereitstellen
         env:
@@ -56,12 +105,12 @@ jobs:
           cd repo
           if [ -n "$USERPREFS_B64" ]; then
             echo "$USERPREFS_B64" | base64 -d > "$CONFIG_DEST"
-            echo "userPrefs aus Secret geschrieben."
+            echo "✅ userPrefs aus Secret geschrieben."
           elif [ -f "$CONFIG_SRC" ]; then
             cp "$CONFIG_SRC" "$CONFIG_DEST"
-            echo "userPrefs aus Repo ($CONFIG_SRC) kopiert."
+            echo "✅ userPrefs aus Repo ($CONFIG_SRC) kopiert."
           else
-            echo "WARN: Weder Secret noch $CONFIG_SRC gefunden. Es wird mit Defaults gebaut."
+            echo "⚠️ WARN: Weder Secret noch $CONFIG_SRC gefunden. Es wird mit Defaults gebaut."
           fi
           head -n 5 "$CONFIG_DEST" || true
 
@@ -76,7 +125,7 @@ jobs:
           cd repo
           mkdir -p .pio
           for b in $BOARDS; do
-            echo "Build $b..."
+            echo "🔨 Build $b..."
             docker run --rm \
               -v "$PWD:/workspace" \
               -w /workspace \
@@ -90,71 +139,89 @@ jobs:
           set -euo pipefail
           cd repo
           
-          # ECHTER Meshtastic Version-Tag abrufen
           MESHTASTIC_VERSION=""
+          IS_TAG_BUILD="${{ steps.target.outputs.is_tag_build }}"
+          TARGET_REF="${{ steps.target.outputs.target_ref }}"
+          BUILD_TYPE="${{ steps.target.outputs.build_type }}"
           
-          echo "=== Git Tag Detection ==="
+          echo "=== 🏷️ Git Tag Detection ==="
+          echo "Build Type: $BUILD_TYPE"
+          echo "Is Tag Build: $IS_TAG_BUILD"
+          echo "Target Ref: $TARGET_REF"
           
-          # Methode 1: Aktueller Tag (falls auf Tag-Commit)
-          CURRENT_TAG=$(git describe --exact-match --tags HEAD 2>/dev/null || echo "")
-          if [ -n "$CURRENT_TAG" ]; then
-            echo "Current commit is on tag: $CURRENT_TAG"
-            MESHTASTIC_VERSION="${CURRENT_TAG#v}"  # v2.7.12 -> 2.7.12
+          # Für Tag-Builds: Verwende den Tag direkt
+          if [ "$IS_TAG_BUILD" == "true" ] && [[ "$TARGET_REF" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+.*) ]]; then
+            MESHTASTIC_VERSION="${BASH_REMATCH[1]}"
+            echo "✅ Using specified tag version: $MESHTASTIC_VERSION"
           fi
           
-          # Methode 2: Nächster erreichbarer Tag
+          # Fallback-Methoden für develop builds
           if [ -z "$MESHTASTIC_VERSION" ]; then
-            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-            if [ -n "$LATEST_TAG" ]; then
-              echo "Latest reachable tag: $LATEST_TAG"
-              MESHTASTIC_VERSION="${LATEST_TAG#v}"  # v2.7.12 -> 2.7.12
+            CURRENT_TAG=$(git describe --exact-match --tags HEAD 2>/dev/null || echo "")
+            if [ -n "$CURRENT_TAG" ]; then
+              echo "✅ Current commit is on tag: $CURRENT_TAG"
+              MESHTASTIC_VERSION="${CURRENT_TAG#v}"
             fi
           fi
           
-          # Methode 3: Alle Tags anzeigen und neuesten nehmen
           if [ -z "$MESHTASTIC_VERSION" ]; then
-            echo "Available tags:"
-            git tag --sort=-version:refname | head -10
-            
-            LATEST_TAG=$(git tag --sort=-version:refname | head -1)
+            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
             if [ -n "$LATEST_TAG" ]; then
-              echo "Using latest available tag: $LATEST_TAG"
+              echo "✅ Latest reachable tag: $LATEST_TAG"
               MESHTASTIC_VERSION="${LATEST_TAG#v}"
             fi
           fi
           
-          # Methode 4: Aus version.h extrahieren
           if [ -z "$MESHTASTIC_VERSION" ]; then
-            echo "Trying to extract version from source files..."
-            
-            # Verschiedene mögliche Dateien prüfen
+            echo "📋 Available tags:"
+            git tag --sort=-version:refname | head -10 || true
+            LATEST_TAG=$(git tag --sort=-version:refname | head -1 2>/dev/null || echo "")
+            if [ -n "$LATEST_TAG" ]; then
+              echo "✅ Using latest available tag: $LATEST_TAG"
+              MESHTASTIC_VERSION="${LATEST_TAG#v}"
+            fi
+          fi
+          
+          # Source-Code Fallback
+          if [ -z "$MESHTASTIC_VERSION" ]; then
+            echo "🔍 Trying to extract version from source files..."
             for file in "src/mesh/generated/version.h" "version.h" "src/main.cpp" "platformio.ini"; do
               if [ -f "$file" ]; then
                 echo "Checking $file"
                 VERSION_FOUND=$(grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' "$file" | head -1 || echo "")
                 if [ -n "$VERSION_FOUND" ]; then
                   MESHTASTIC_VERSION="$VERSION_FOUND"
-                  echo "Found version in $file: $MESHTASTIC_VERSION"
+                  echo "✅ Found version in $file: $MESHTASTIC_VERSION"
                   break
                 fi
               fi
             done
           fi
           
-          # Fallback
+          # Final Fallback
           if [ -z "$MESHTASTIC_VERSION" ]; then
-            MESHTASTIC_VERSION="2.7.12"  # Aktueller bekannter Tag
-            echo "Using fallback version: $MESHTASTIC_VERSION"
+            MESHTASTIC_VERSION="2.7.12"
+            echo "⚠️ Using fallback version: $MESHTASTIC_VERSION"
           fi
           
-          # Git-Info für Custom-Kennzeichnung
+          # Git-Info
           GIT_HASH=$(git rev-parse --short HEAD)
           TS=$(date -u +%Y%m%d-%H%M%S)
           
-          # Versionen erstellen
-          FULL_VERSION="${MESHTASTIC_VERSION}-mh-${GIT_HASH}-${TS}"
-          SHORT_VERSION="${MESHTASTIC_VERSION}-mh-${GIT_HASH}"
-          DISPLAY_VERSION="${MESHTASTIC_VERSION}-MH"
+          # Versionen je nach Build-Typ
+          if [ "$IS_TAG_BUILD" == "true" ]; then
+            # Für Tags: Saubere Version ohne Timestamp
+            FULL_VERSION="${MESHTASTIC_VERSION}-mh-${GIT_HASH}"
+            SHORT_VERSION="${MESHTASTIC_VERSION}-mh"
+            DISPLAY_VERSION="${MESHTASTIC_VERSION}-MH"
+            echo "🏷️ Tag build - clean versioning"
+          else
+            # Für develop: Mit Timestamp
+            FULL_VERSION="${MESHTASTIC_VERSION}-mh-${GIT_HASH}-${TS}"
+            SHORT_VERSION="${MESHTASTIC_VERSION}-mh-${GIT_HASH}"
+            DISPLAY_VERSION="${MESHTASTIC_VERSION}-MH-dev"
+            echo "🔄 Develop build - timestamped versioning"
+          fi
           
           echo "base_version=$MESHTASTIC_VERSION" >> $GITHUB_OUTPUT
           echo "version=$FULL_VERSION" >> $GITHUB_OUTPUT
@@ -162,13 +229,16 @@ jobs:
           echo "display_version=$DISPLAY_VERSION" >> $GITHUB_OUTPUT
           echo "timestamp=$TS" >> $GITHUB_OUTPUT
           echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
+          echo "build_type=$BUILD_TYPE" >> $GITHUB_OUTPUT
           
-          echo "=== Final Version Info ==="
+          echo "=== 📋 Final Version Info ==="
           echo "Meshtastic Base: $MESHTASTIC_VERSION"
           echo "Full Version: $FULL_VERSION"
           echo "Short Version: $SHORT_VERSION"  
           echo "Display Version: $DISPLAY_VERSION"
-          
+          echo "Build Type: $BUILD_TYPE"
+
+      # Rest der Steps bleiben gleich...
       - name: Firmware einsammeln und strukturieren
         id: firmware
         run: |
@@ -180,7 +250,7 @@ jobs:
           COLLECTED_BOARDS=""
           
           for b in $BOARDS; do
-            echo "Sammle Firmware für Board: $b"
+            echo "📦 Sammle Firmware für Board: $b"
             BOARD_FILES=""
             
             # Suche nach Firmware-Dateien in verschiedenen Varianten
@@ -196,7 +266,7 @@ jobs:
                   if [ -f "$f" ]; then
                     target_name="firmware-${b}${variant}-${VERSION}.$ext"
                     cp "$f" "../firmware-output/$target_name"
-                    echo "Kopiert: $f -> $target_name"
+                    echo "✅ Kopiert: $f -> $target_name"
                     BOARD_FILES="$BOARD_FILES $target_name"
                     break
                   fi
@@ -211,7 +281,7 @@ jobs:
                 if [ -f "$f" ]; then
                   target_name="firmware-${b}-${VERSION}.$ext"
                   cp "$f" "../firmware-output/$target_name"
-                  echo "Kopiert (generic): $f -> $target_name"
+                  echo "✅ Kopiert (generic): $f -> $target_name"
                   BOARD_FILES="$BOARD_FILES $target_name"
                   
                   # Erstelle zusätzliche Varianten
@@ -224,16 +294,17 @@ jobs:
             if [ -n "$BOARD_FILES" ]; then
               COLLECTED_BOARDS="$COLLECTED_BOARDS $b"
             else
-              echo "WARNUNG: Keine Firmware für Board $b gefunden"
+              echo "⚠️ WARNUNG: Keine Firmware für Board $b gefunden"
             fi
           done
           
           cd ..
           echo "collected_boards=$COLLECTED_BOARDS" >> $GITHUB_OUTPUT
           
-          echo "=== Gesammelte Firmware-Dateien ==="
+          echo "=== 📦 Gesammelte Firmware-Dateien ==="
           ls -lah firmware-output/ || true
 
+      # Rest deiner Steps bleibt unverändert...
       - name: Release erstellen
         id: release
         if: steps.firmware.outputs.collected_boards != ''
@@ -243,25 +314,26 @@ jobs:
           set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
           BUILD_DATE="${{ steps.version.outputs.build_date }}"
+          BUILD_TYPE="${{ steps.version.outputs.build_type }}"
           TAG="firmware-${VERSION}"
           NAME="Firmware Build ${VERSION}"
           API="https://api.github.com/repos/${OWNER_REPO}"
           
           # Release body erstellen
           cat > release_body.md << EOF
-          # Automatischer Firmware Build
+          # 🚀 Automatischer Firmware Build
           
           **Version:** ${VERSION}  
           **Build-Datum:** ${BUILD_DATE}  
-          **Branch:** ${BRANCH}  
+          **Build-Typ:** ${BUILD_TYPE}  
           **Boards:** ${{ steps.firmware.outputs.collected_boards }}
           
-          ## Änderungen
+          ## 🔧 Änderungen
           - Automatischer Sync mit Upstream
           - Custom userPrefs angewendet
           - Für folgende Hardware gebaut: ${{ steps.firmware.outputs.collected_boards }}
           
-          ## Installation
+          ## 📱 Installation
           Verwende den [Web Flasher](https://flasher.schwarzes-seelenreich.de) für einfache Installation.
           EOF
           
@@ -321,7 +393,7 @@ jobs:
             [ -f "$path" ] || continue
             name=$(basename "$path")
             
-            echo "Upload: $name"
+            echo "📤 Upload: $name"
             http=$(curl -sS -L -w "%{http_code}" -o /dev/null \
               -X POST \
               -H "Accept: application/vnd.github+json" \
@@ -331,10 +403,10 @@ jobs:
               --data-binary @"$path")
             
             if [ "$http" -ge 400 ]; then
-              echo "FEHLER beim Upload von $name (HTTP $http)"
+              echo "❌ FEHLER beim Upload von $name (HTTP $http)"
               exit 1
             else
-              echo "✓ $name hochgeladen (HTTP $http)"
+              echo "✅ $name hochgeladen (HTTP $http)"
             fi
           done
 
@@ -350,29 +422,26 @@ jobs:
           BUILD_DATE="${{ steps.version.outputs.build_date }}"
           TAG="${{ steps.release.outputs.tag_name }}"
           RELEASE_URL="https://github.com/${OWNER_REPO}/releases/tag/${TAG}"
+          DISPLAY_VERSION="${{ steps.version.outputs.display_version }}"
+          BASE_VERSION="${{ steps.version.outputs.base_version }}"
+          BUILD_TYPE="${{ steps.version.outputs.build_type }}"
           
-          # KORRIGIERT: Boards richtig als Array übertragen
+          # Boards-Array für JSON erstellen
           BOARDS_RAW="${{ steps.firmware.outputs.collected_boards }}"
           echo "Raw boards: '$BOARDS_RAW'"
           
-          # Erstelle JSON-Array aus Space-separated String
           BOARDS_JSON="[]"
           if [ -n "$BOARDS_RAW" ]; then
             BOARDS_JSON=$(echo "$BOARDS_RAW" | jq -R 'split(" ") | map(select(. != ""))')
           fi
           
-          echo "=== Backend Notification Debug ==="
+          echo "=== 📡 Backend Notification Debug ==="
           echo "Version: $VERSION"
           echo "Short Version: $SHORT_VERSION"
+          echo "Display Version: $DISPLAY_VERSION"
+          echo "Build Type: $BUILD_TYPE"
           echo "Download Base URL: https://github.com/${OWNER_REPO}/releases/download/${TAG}"
           echo "Boards JSON: $BOARDS_JSON"
-          echo "Individual boards:"
-          echo "$BOARDS_JSON" | jq -r '.[]' | while read board; do
-            echo "  - $board"
-          done
-          
-          DISPLAY_VERSION="${{ steps.version.outputs.display_version }}"
-          BASE_VERSION="${{ steps.version.outputs.base_version }}"
           
           DISPATCH_PAYLOAD="{
             \"event_type\": \"firmware-built\",
@@ -382,6 +451,7 @@ jobs:
               \"base_version\": \"$BASE_VERSION\",
               \"display_version\": \"$DISPLAY_VERSION\",
               \"build_date\": \"$BUILD_DATE\",
+              \"build_type\": \"$BUILD_TYPE\",
               \"tag_name\": \"$TAG\",
               \"release_url\": \"$RELEASE_URL\",
               \"download_base_url\": \"https://github.com/${OWNER_REPO}/releases/download/${TAG}\",
@@ -400,4 +470,4 @@ jobs:
             "https://api.github.com/repos/${BACKEND_REPO}/dispatches" \
             -d "$DISPATCH_PAYLOAD"
           
-          echo "✓ Backend benachrichtigt für Version: $VERSION"
+          echo "✅ Backend benachrichtigt für Version: $VERSION"
