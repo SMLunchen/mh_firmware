@@ -315,72 +315,104 @@ jobs:
           
           echo "✅ platformio-custom.py wurde für alle Plattformen erweitert"
 #test!
-      - name: Korrigierte UserPrefs Build-Flags für nRF52
+- name: Build-Flags aus userPrefs.jsonc generieren
+        id: build_flags
         run: |
           set -euo pipefail
           cd repo
-          echo "📖 Creating properly formatted userPrefs build flags..."
-          # Verwende Python für korrekte Formatierung
-          USERPREFS_FLAGS=$(python3 << 'EOF'
-          import shlex
-          # Definiere userPrefs mit korrekter Syntax
-          flags = []
-          # Channels
-          flags.append('-DUSERPREFS_CHANNELS_TO_WRITE=2')
-          # Channel 0
-          flags.append('-DUSERPREFS_CHANNEL_0_DOWNLINK_ENABLED=false')
-          flags.append('-DUSERPREFS_CHANNEL_0_NAME="ShortSlow"')
-          flags.append('-DUSERPREFS_CHANNEL_0_PRECISION=14')
-          flags.append('-DUSERPREFS_CHANNEL_0_PSK={0x01}')  # Kein String!
-          flags.append('-DUSERPREFS_CHANNEL_0_UPLINK_ENABLED=true')
-          # Channel 1  
-          flags.append('-DUSERPREFS_CHANNEL_1_DOWNLINK_ENABLED=true')
-          flags.append('-DUSERPREFS_CHANNEL_1_NAME="MeshHessen"')
-          flags.append('-DUSERPREFS_CHANNEL_1_PRECISION=14')
-          flags.append('-DUSERPREFS_CHANNEL_1_PSK={0xfa,0xe4,0xcc,0x11,0xa3,0x91,0xee,0x19,0x2a,0x69,0x7b,0xfe,0x0d,0x13,0x8e,0x11,0xde,0x41,0x86,0xf0,0x08,0x41,0x8f,0xc2,0x67,0xf1,0xeb,0xe2,0xca,0x19,0x70,0xe5}')
-          flags.append('-DUSERPREFS_CHANNEL_1_UPLINK_ENABLED=true')
-          # LoRa Config
-          flags.append('-DUSERPREFS_CONFIG_LORA_REGION=meshtastic_Config_LoRaConfig_RegionCode_EU_868')
-          flags.append('-DUSERPREFS_LORACONFIG_MODEM_PRESET=meshtastic_Config_LoRaConfig_ModemPreset_SHORT_SLOW')
-          # Korrekte Shell-Escape für komplexe Werte
-          escaped_flags = []
-          for flag in flags:
-              # Für Shell-Sicherheit escapen
-              escaped_flags.append(shlex.quote(flag))
-          print(' '.join(escaped_flags))
-          EOF
-          )
-          if [ -n "$USERPREFS_FLAGS" ]; then
-              echo "USERPREFS_BUILD_FLAGS=$USERPREFS_FLAGS" >> $GITHUB_ENV
-              echo "✅ UserPrefs flags generated with proper syntax"
-              echo "Key changes:"
-              echo "  - PSK as C arrays: {0x01} not \"{ 0x01 }\""
-              echo "  - Names as strings: \"ShortSlow\" not ShortSlow"
-              echo "  - No spaces in arrays: {0xfa,0xe4...} not { 0xfa, 0xe4... }"
-              echo "Preview: ${USERPREFS_FLAGS:0:200}..."
-          else
-              echo "❌ Failed to generate userPrefs flags"
-              exit 1
+          
+          # Prüfe ob userPrefs.jsonc existiert
+          if [ ! -f "userPrefs.jsonc" ]; then
+            echo "⚠️ Keine userPrefs.jsonc gefunden"
+            echo "build_flags=" >> $GITHUB_OUTPUT
+            exit 0
           fi
+          
+          echo "📖 Generiere Build-Flags aus userPrefs.jsonc..."
+          
+          # Python-Script zum Parsen der JSON und Erstellen der Flags
+          BUILD_FLAGS=$(python3 << 'PYEOF'
+          import json
+          import re
+          import sys
+          
+          # JSON mit Kommentaren einlesen
+          with open('userPrefs.jsonc', 'r') as f:
+              json_str = re.sub(r'//.*', '', f.read(), flags=re.MULTILINE)
+              try:
+                  prefs = json.loads(json_str)
+              except json.JSONDecodeError as e:
+                  print(f"Error parsing userPrefs.jsonc: {e}", file=sys.stderr)
+                  sys.exit(1)
+          
+          flags = []
+          for key, value in prefs.items():
+              # Array-Werte (PSK, Image Data)
+              if isinstance(value, str) and value.strip().startswith('{'):
+                  # Entferne Whitespace aus Arrays für C-Kompatibilität
+                  clean_value = re.sub(r'\s+', '', value)
+                  flags.append(f'-D{key}={clean_value}')
+              # Numerische Werte
+              elif isinstance(value, str) and value.lstrip('-').replace('.', '').isdigit():
+                  flags.append(f'-D{key}={value}')
+              # Boolean Werte
+              elif value in ['true', 'false']:
+                  flags.append(f'-D{key}={value}')
+              # Enum-Werte (meshtastic_*)
+              elif isinstance(value, str) and value.startswith('meshtastic_'):
+                  flags.append(f'-D{key}={value}')
+              # String-Werte
+              else:
+                  # Escape Quotes für Shell
+                  escaped = value.replace('"', '\\"')
+                  flags.append(f'-D{key}=\\"{escaped}\\"')
+          
+          # Output für GitHub Actions
+          print(' '.join(flags))
+          PYEOF
+          )
+          
+          if [ -z "$BUILD_FLAGS" ]; then
+            echo "❌ Keine Build-Flags generiert"
+            exit 1
+          fi
+          
+          # In Output und ENV speichern
+          echo "build_flags=$BUILD_FLAGS" >> $GITHUB_OUTPUT
+          echo "EXTRA_BUILD_FLAGS=$BUILD_FLAGS" >> $GITHUB_ENV
+          
+          echo "✅ Build-Flags generiert:"
+          echo "$BUILD_FLAGS" | tr ' ' '\n' | head -10
+          echo "... ($(echo "$BUILD_FLAGS" | wc -w) Flags insgesamt)"
 
       - name: Docker Image ziehen
         run: |
           set -euo pipefail
           docker pull "$DOCKER_IMAGE"
 
-      - name: Build (PlatformIO im Docker)
+      - name: Build (PlatformIO im Docker) - KORRIGIERT
         run: |
           set -euo pipefail
           cd repo
           mkdir -p .pio
+          
+          # Build-Flags aus vorherigem Step holen
+          EXTRA_FLAGS="${{ steps.build_flags.outputs.build_flags }}"
+          
           for b in $BOARDS; do
-            echo "🔨 Build $b..."
+            echo "🔨 Build $b mit UserPrefs..."
+            echo "Extra Flags: ${EXTRA_FLAGS:0:200}..."
+            
+            # Build mit zusätzlichen Flags
             docker run --rm \
               -v "$PWD:/workspace" \
               -w /workspace \
+              -e "PLATFORMIO_BUILD_FLAGS=$EXTRA_FLAGS" \
               "$DOCKER_IMAGE" \
               bash -lc "platformio run -e $b"
           done
+          
+          echo "✅ Build abgeschlossen"
 
       - name: Versionsnummer bestimmen
         id: version
