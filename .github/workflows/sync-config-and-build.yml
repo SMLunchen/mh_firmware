@@ -107,11 +107,12 @@ jobs:
             echo "$USERPREFS_B64" | base64 -d > "$CONFIG_DEST"
             echo "✅ userPrefs aus Secret geschrieben."
           elif [ -f "$CONFIG_SRC" ]; then
-            cp "$CONFIG_SRC" "$CONFIG_DEST"
+            cp "$CONFIG_SRC" "repo/$CONFIG_DEST"
             echo "✅ userPrefs aus Repo ($CONFIG_SRC) kopiert."
           else
             echo "⚠️ WARN: Weder Secret noch $CONFIG_SRC gefunden. Es wird mit Defaults gebaut."
           fi
+          cd repo
           head -n 5 "$CONFIG_DEST" || true
           
       - name: platformio-custom.py für alle Plattformen erweitern
@@ -320,7 +321,6 @@ jobs:
         run: |
           set -euo pipefail
           cd repo
-          cp "$CONFIG_SRC" "$CONFIG_DEST"
           # Prüfe ob userPrefs.jsonc existiert
           if [ ! -f "userPrefs.jsonc" ]; then
             echo "⚠️ Keine userPrefs.jsonc gefunden"
