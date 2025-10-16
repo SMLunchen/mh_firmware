@@ -314,6 +314,54 @@ jobs:
           chmod +x bin/platformio-custom.py
           
           echo "✅ platformio-custom.py wurde für alle Plattformen erweitert"
+#test!
+      - name: Korrigierte UserPrefs Build-Flags für nRF52
+        run: |
+          set -euo pipefail
+          cd repo
+          echo "📖 Creating properly formatted userPrefs build flags..."
+          # Verwende Python für korrekte Formatierung
+          USERPREFS_FLAGS=$(python3 << 'EOF'
+          import shlex
+          # Definiere userPrefs mit korrekter Syntax
+          flags = []
+          # Channels
+          flags.append('-DUSERPREFS_CHANNELS_TO_WRITE=2')
+          # Channel 0
+          flags.append('-DUSERPREFS_CHANNEL_0_DOWNLINK_ENABLED=false')
+          flags.append('-DUSERPREFS_CHANNEL_0_NAME="ShortSlow"')
+          flags.append('-DUSERPREFS_CHANNEL_0_PRECISION=14')
+          flags.append('-DUSERPREFS_CHANNEL_0_PSK={0x01}')  # Kein String!
+          flags.append('-DUSERPREFS_CHANNEL_0_UPLINK_ENABLED=true')
+          # Channel 1  
+          flags.append('-DUSERPREFS_CHANNEL_1_DOWNLINK_ENABLED=true')
+          flags.append('-DUSERPREFS_CHANNEL_1_NAME="MeshHessen"')
+          flags.append('-DUSERPREFS_CHANNEL_1_PRECISION=14')
+          flags.append('-DUSERPREFS_CHANNEL_1_PSK={0xfa,0xe4,0xcc,0x11,0xa3,0x91,0xee,0x19,0x2a,0x69,0x7b,0xfe,0x0d,0x13,0x8e,0x11,0xde,0x41,0x86,0xf0,0x08,0x41,0x8f,0xc2,0x67,0xf1,0xeb,0xe2,0xca,0x19,0x70,0xe5}')
+          flags.append('-DUSERPREFS_CHANNEL_1_UPLINK_ENABLED=true')
+          # LoRa Config
+          flags.append('-DUSERPREFS_CONFIG_LORA_REGION=meshtastic_Config_LoRaConfig_RegionCode_EU_868')
+          flags.append('-DUSERPREFS_LORACONFIG_MODEM_PRESET=meshtastic_Config_LoRaConfig_ModemPreset_SHORT_SLOW')
+          # Korrekte Shell-Escape für komplexe Werte
+          escaped_flags = []
+          for flag in flags:
+              # Für Shell-Sicherheit escapen
+              escaped_flags.append(shlex.quote(flag))
+          print(' '.join(escaped_flags))
+          EOF
+          )
+          if [ -n "$USERPREFS_FLAGS" ]; then
+              echo "USERPREFS_BUILD_FLAGS=$USERPREFS_FLAGS" >> $GITHUB_ENV
+              echo "✅ UserPrefs flags generated with proper syntax"
+              echo "Key changes:"
+              echo "  - PSK as C arrays: {0x01} not \"{ 0x01 }\""
+              echo "  - Names as strings: \"ShortSlow\" not ShortSlow"
+              echo "  - No spaces in arrays: {0xfa,0xe4...} not { 0xfa, 0xe4... }"
+              echo "Preview: ${USERPREFS_FLAGS:0:200}..."
+          else
+              echo "❌ Failed to generate userPrefs flags"
+              exit 1
+          fi
 
       - name: Docker Image ziehen
         run: |
