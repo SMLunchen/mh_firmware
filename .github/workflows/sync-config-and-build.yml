@@ -356,72 +356,30 @@ jobs:
           set -euo pipefail
           docker pull "$DOCKER_IMAGE"
 
-      - name: UserPrefs direkt in PLATFORMIO_BUILD_FLAGS setzen
+      - name: UserPrefs nur für wichtige Settings
         run: |
           set -euo pipefail
           cd repo
           
-          if [ -f "userPrefs.jsonc" ]; then
-              echo "📖 Converting userPrefs to PLATFORMIO_BUILD_FLAGS..."
-              
-              # Python Script zum Konvertieren
-              USERPREFS_FLAGS=$(python3 << 'EOF'
-          import json
-          import re
-          import sys
+          echo "📖 Setting essential userPrefs for nRF52..."
           
-          try:
-              with open('userPrefs.jsonc') as f:
-                  content = f.read()
-                  # Kommentare entfernen  
-                  jsonStr = re.sub("//.*", "", content, flags=re.MULTILINE)
-                  userPrefs = json.loads(jsonStr)
-              
-              flags = []
-              print(f"Processing {len(userPrefs)} user preferences:", file=sys.stderr)
-              
-              for pref, value in userPrefs.items():
-                  print(f"  {pref} = {value} (type: {type(value).__name__})", file=sys.stderr)
-                  
-                  if str(value).startswith("{"):
-                      flags.append(f"-D{pref}={value}")
-                  elif str(value).lstrip("-").replace(".", "").isdigit():
-                      flags.append(f"-D{pref}={value}")
-                  elif value in ["true", "false"]:
-                      flags.append(f"-D{pref}={value}")
-                  elif str(value).startswith("meshtastic_"):
-                      flags.append(f"-D{pref}={value}")
-                  else:
-                      # Escape quotes properly for shell
-                      escaped_value = str(value).replace('"', '\\"')
-                      flags.append(f"-D{pref}=\"{escaped_value}\"")
-              
-              print(f"Generated {len(flags)} build flags", file=sys.stderr)
-              print(" ".join(flags))
-              
-          except Exception as e:
-              print(f"Error parsing userPrefs.jsonc: {e}", file=sys.stderr)
-              sys.exit(1)
-          EOF
-          )
-              
-              if [ -n "$USERPREFS_FLAGS" ]; then
-                  echo "✅ Generated userPrefs build flags:"
-                  echo "Number of flags: $(echo $USERPREFS_FLAGS | wc -w)"
-                  echo "Preview (first 300 chars): ${USERPREFS_FLAGS:0:300}..."
-                  
-                  # In GitHub Environment Variable speichern für den Build-Step
-                  echo "USERPREFS_BUILD_FLAGS=$USERPREFS_FLAGS" >> $GITHUB_ENV
-                  
-                  echo "✅ UserPrefs flags ready for build"
-              else
-                  echo "❌ Failed to generate userPrefs flags"
-                  exit 1
-              fi
-          else
-              echo "⚠️ No userPrefs.jsonc found - building with defaults"
-              echo "USERPREFS_BUILD_FLAGS=" >> $GITHUB_ENV
-          fi
+          # Nur die essentiellen Settings ohne problematische Werte
+          ESSENTIAL_FLAGS="-DUSERPREFS_CHANNELS_TO_WRITE=2"
+          ESSENTIAL_FLAGS="$ESSENTIAL_FLAGS -DUSERPREFS_CHANNEL_0_NAME=ShortSlow"
+          ESSENTIAL_FLAGS="$ESSENTIAL_FLAGS -DUSERPREFS_CHANNEL_1_NAME=MeshHessen"
+          ESSENTIAL_FLAGS="$ESSENTIAL_FLAGS -DUSERPREFS_CONFIG_LORA_REGION=meshtastic_Config_LoRaConfig_RegionCode_EU_868"
+          ESSENTIAL_FLAGS="$ESSENTIAL_FLAGS -DUSERPREFS_LORACONFIG_MODEM_PRESET=meshtastic_Config_LoRaConfig_ModemPreset_SHORT_SLOW"
+          ESSENTIAL_FLAGS="$ESSENTIAL_FLAGS -DUSERPREFS_CHANNEL_0_PSK=\"{ 0x01 }\""
+          ESSENTIAL_FLAGS="$ESSENTIAL_FLAGS -DUSERPREFS_CHANNEL_1_PSK=\"{ 0xfa, 0xe4, 0xcc, 0x11, 0xa3, 0x91, 0xee, 0x19, 0x2a, 0x69, 0x7b, 0xfe, 0x0d, 0x13, 0x8e, 0x11, 0xde, 0x41, 0x86, 0xf0, 0x08, 0x41, 0x8f, 0xc2, 0x67, 0xf1, 0xeb, 0xe2, 0xca, 0x19, 0x70, 0xe5 }\""
+          ESSENTIAL_FLAGS="$ESSENTIAL_FLAGS -DUSERPREFS_CHANNEL_0_UPLINK_ENABLED=true"
+          ESSENTIAL_FLAGS="$ESSENTIAL_FLAGS -DUSERPREFS_CHANNEL_1_UPLINK_ENABLED=true"
+          ESSENTIAL_FLAGS="$ESSENTIAL_FLAGS -DUSERPREFS_CHANNEL_0_DOWNLINK_ENABLED=false"
+          ESSENTIAL_FLAGS="$ESSENTIAL_FLAGS -DUSERPREFS_CHANNEL_1_DOWNLINK_ENABLED=true"
+          
+          echo "USERPREFS_BUILD_FLAGS=$ESSENTIAL_FLAGS" >> $GITHUB_ENV
+          
+          echo "✅ Essential userPrefs flags set (without problematic logo/text)"
+          echo "Flags: $ESSENTIAL_FLAGS"
 
       - name: Build (PlatformIO im Docker mit userPrefs)
         env:
