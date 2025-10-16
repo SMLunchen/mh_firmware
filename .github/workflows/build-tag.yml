@@ -18,18 +18,30 @@ permissions:
 jobs:
   build_tag:
     runs-on: ubuntu-latest
+    env:
+      DOCKER_IMAGE: infinitecoding/platformio-for-ci:latest
+      BOARDS: ${{ github.event.inputs.boards }}
+      CONFIG_SRC: my-userprefs.jsonc
+      CONFIG_DEST: userPrefs.jsonc
+      OWNER_REPO: ${{ github.repository }}
+      BACKEND_REPO: "SMLunchen/mh_flasher_backend"
+      TARGET_TAG: ${{ github.event.inputs.tag }}
+      
     steps:
-      - name: Trigger main workflow with tag
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'build.yml', // Name deiner Haupt-Workflow-Datei
-              ref: 'main', // Branch wo der Workflow liegt
-              inputs: {
-                target_tag: '${{ github.event.inputs.tag }}',
-                boards: '${{ github.event.inputs.boards }}'
-              }
-            });
+      - name: Repo klonen und Tag auschecken
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "🏷️ Cloning repository and checking out tag: $TARGET_TAG"
+          git clone "https://x-access-token:${TOKEN}@github.com/${OWNER_REPO}.git" repo
+          cd repo
+          git fetch --tags
+          git checkout "tags/$TARGET_TAG"
+          git submodule update --init --recursive
+          
+          echo "✅ Checked out tag: $TARGET_TAG"
+          echo "Current HEAD: $(git rev-parse HEAD)"
+
+      # Rest der Steps wie in der ersten Action, aber ohne Upstream-Merge
+      # ... (userPrefs, Docker, Build, Version, etc.)
