@@ -1,0 +1,35 @@
+name: Build Specific Tag
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Git tag to build (e.g., v2.7.12)'
+        required: true
+        type: string
+      boards:
+        description: 'Boards to build (space separated)'
+        required: false
+        default: "heltec-v3 heltec-wireless-tracker-V1-0"
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build_tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger main workflow with tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'build.yml', // Name deiner Haupt-Workflow-Datei
+              ref: 'main', // Branch wo der Workflow liegt
+              inputs: {
+                target_tag: '${{ github.event.inputs.tag }}',
+                boards: '${{ github.event.inputs.boards }}'
+              }
+            });
