@@ -320,18 +320,114 @@ jobs:
           set -euo pipefail
           docker pull "$DOCKER_IMAGE"
 
-      - name: Build (PlatformIO im Docker)
+      - name: UserPrefs direkt in PLATFORMIO_BUILD_FLAGS setzen
+        run: |
+          set -euo pipefail
+          cd repo
+          
+          if [ -f "userPrefs.jsonc" ]; then
+              echo "📖 Converting userPrefs to PLATFORMIO_BUILD_FLAGS..."
+              
+              # Python Script zum Konvertieren
+              USERPREFS_FLAGS=$(python3 << 'EOF'
+          import json
+          import re
+          import sys
+          
+          try:
+              with open('userPrefs.jsonc') as f:
+                  content = f.read()
+                  # Kommentare entfernen  
+                  jsonStr = re.sub("//.*", "", content, flags=re.MULTILINE)
+                  userPrefs = json.loads(jsonStr)
+              
+              flags = []
+              print(f"Processing {len(userPrefs)} user preferences:", file=sys.stderr)
+              
+              for pref, value in userPrefs.items():
+                  print(f"  {pref} = {value} (type: {type(value).__name__})", file=sys.stderr)
+                  
+                  if str(value).startswith("{"):
+                      flags.append(f"-D{pref}={value}")
+                  elif str(value).lstrip("-").replace(".", "").isdigit():
+                      flags.append(f"-D{pref}={value}")
+                  elif value in ["true", "false"]:
+                      flags.append(f"-D{pref}={value}")
+                  elif str(value).startswith("meshtastic_"):
+                      flags.append(f"-D{pref}={value}")
+                  else:
+                      # Escape quotes properly for shell
+                      escaped_value = str(value).replace('"', '\\"')
+                      flags.append(f"-D{pref}=\"{escaped_value}\"")
+              
+              print(f"Generated {len(flags)} build flags", file=sys.stderr)
+              print(" ".join(flags))
+              
+          except Exception as e:
+              print(f"Error parsing userPrefs.jsonc: {e}", file=sys.stderr)
+              sys.exit(1)
+          EOF
+          )
+              
+              if [ -n "$USERPREFS_FLAGS" ]; then
+                  echo "✅ Generated userPrefs build flags:"
+                  echo "Number of flags: $(echo $USERPREFS_FLAGS | wc -w)"
+                  echo "Preview (first 300 chars): ${USERPREFS_FLAGS:0:300}..."
+                  
+                  # In GitHub Environment Variable speichern für den Build-Step
+                  echo "USERPREFS_BUILD_FLAGS=$USERPREFS_FLAGS" >> $GITHUB_ENV
+                  
+                  echo "✅ UserPrefs flags ready for build"
+              else
+                  echo "❌ Failed to generate userPrefs flags"
+                  exit 1
+              fi
+          else
+              echo "⚠️ No userPrefs.jsonc found - building with defaults"
+              echo "USERPREFS_BUILD_FLAGS=" >> $GITHUB_ENV
+          fi
+
+      - name: Build (PlatformIO im Docker mit userPrefs)
+        env:
+          USERPREFS_BUILD_FLAGS: ${{ env.USERPREFS_BUILD_FLAGS }}
         run: |
           set -euo pipefail
           cd repo
           mkdir -p .pio
+          
+          echo "=== 🔧 Build Configuration ==="
+          echo "Boards to build: $BOARDS"
+          echo "UserPrefs flags loaded: $(echo $USERPREFS_BUILD_FLAGS | wc -w) flags"
+          
           for b in $BOARDS; do
-            echo "🔨 Build $b..."
-            docker run --rm \
-              -v "$PWD:/workspace" \
-              -w /workspace \
-              "$DOCKER_IMAGE" \
-              bash -lc "platformio run -e $b"
+            echo "🔨 Building $b..."
+            
+            # Für nRF52 Boards: Spezielle Build-Chain mit userPrefs
+            if [[ "$b" =~ rak4631|nrf52|rak4631_eink ]]; then
+              echo "🔧 nRF52 build detected - using build-nrf52.sh with userPrefs"
+              echo "PLATFORMIO_BUILD_FLAGS being passed: $(echo $USERPREFS_BUILD_FLAGS | wc -w) flags"
+              
+              # Zeige erste paar Flags zur Verifikation
+              if [ -n "$USERPREFS_BUILD_FLAGS" ]; then
+                echo "Sample flags: $(echo $USERPREFS_BUILD_FLAGS | cut -d' ' -f1-3)..."
+              fi
+              
+              docker run --rm \
+                -v "$PWD:/workspace" \
+                -w /workspace \
+                -e PLATFORMIO_BUILD_FLAGS="$USERPREFS_BUILD_FLAGS" \
+                "$DOCKER_IMAGE" \
+                bash -lc "./bin/build-nrf52.sh $b"
+            else
+              echo "🔧 Standard ESP32 build (userPrefs via platformio-custom.py)"
+              docker run --rm \
+                -v "$PWD:/workspace" \
+                -w /workspace \
+                "$DOCKER_IMAGE" \
+                bash -lc "platformio run -e $b"
+            fi
+            
+            echo "✅ Build completed for $b"
           done
 
       - name: Versionsnummer bestimmen
