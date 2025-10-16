@@ -315,20 +315,20 @@ jobs:
           
           echo "✅ platformio-custom.py wurde für alle Plattformen erweitert"
 #test!
-      - name: Build-Flags aus my-userprefs.jsonc generieren
+      - name: Build-Flags aus userPrefs.jsonc generieren
         id: build_flags
         run: |
           set -euo pipefail
           cd repo
-          
-          # Prüfe ob my-userprefs.jsonc existiert
-          if [ ! -f "my-userprefs.jsonc" ]; then
-            echo "⚠️ Keine my-userprefs.jsonc gefunden"
+          cp "$CONFIG_SRC" "$CONFIG_DEST"
+          # Prüfe ob userPrefs.jsonc existiert
+          if [ ! -f "userPrefs.jsonc" ]; then
+            echo "⚠️ Keine userPrefs.jsonc gefunden"
             echo "build_flags=" >> $GITHUB_OUTPUT
             exit 0
           fi
           
-          echo "📖 Generiere Build-Flags aus my-userprefs.jsonc..."
+          echo "📖 Generiere Build-Flags aus userPrefs.jsonc..."
           
           # Python-Script zum Parsen der JSON und Erstellen der Flags
           BUILD_FLAGS=$(python3 << 'PYEOF'
@@ -337,7 +337,7 @@ jobs:
           import sys
           
           # JSON mit Kommentaren einlesen
-          with open('my-userprefs.jsonc', 'r') as f:
+          with open('userPrefs.jsonc', 'r') as f:
               json_str = re.sub(r'//.*', '', f.read(), flags=re.MULTILINE)
               try:
                   prefs = json.loads(json_str)
