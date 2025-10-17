@@ -415,10 +415,10 @@ jobs:
           flags = []
           for key, value in prefs.items():
               if isinstance(value, str):
-              escaped = str(value).replace('"', '\\"')
-              flags.append(f'-D{key}="{escaped}"')
+               escaped = str(value).replace('"', '\\"')
+               flags.append(f'-D{key}="{escaped}"')
               else:
-                  flags.append(f'-D{key}={value}')
+               flags.append(f'-D{key}={value}')
           
           print(' '.join(flags))
           PYEOF
