@@ -412,14 +412,30 @@ jobs:
                   print(f"Error parsing userPrefs.jsonc: {e}", file=sys.stderr)
                   sys.exit(1)
           
-          flags = []
-          for key, value in prefs.items():
-              if isinstance(value, str):
-               escaped = str(value).replace('"', '\\"')
-               flags.append(f'-D{key}="{escaped}"')
-              else:
-               flags.append(f'-D{key}={value}')
-          
+              flags = []
+              or key, value in prefs.items():
+                  # String-Wert normalisieren (Zeilenumbrüche entfernen)
+                  str_value = str(value).strip()
+                  
+                  if isinstance(value, bool):
+                      # Booleans ohne Anführungszeichen
+                      flags.append(f'-D{key}={str(value).lower()}')
+                  elif isinstance(value, (int, float)):
+                      # Zahlen ohne Anführungszeichen
+                      flags.append(f'-D{key}={value}')
+                  elif str_value.startswith('{') and str_value.endswith('}'):
+                      # C-Arrays ohne Anführungszeichen, aber Zeilenumbrüche entfernen
+                      cleaned_array = re.sub(r'\s+', '', str_value)
+                      flags.append(f'-D{key}={cleaned_array}')
+                  elif str_value.startswith('meshtastic_'):
+                      # Enum-Werte ohne Anführungszeichen
+                      flags.append(f'-D{key}={str_value}')
+                  else:
+                      # Strings mit Anfüfhrungszeichen, Zeilenumbrüche entfernen
+                      cleaned_str = ' '.join(str_value.split())
+                      escaped = cleaned_str.replace('"', '\\"')
+                      flags.append(f'-D{key}="{escaped}"')
+                      
           print(' '.join(flags))
           PYEOF
           )
