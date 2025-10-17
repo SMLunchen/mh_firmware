@@ -183,48 +183,6 @@ jobs:
             head -n 15 "$CONFIG_DEST"
           fi
           
-      - name: userPrefs bereitstellen
-        env:
-          USERPREFS_B64: ${{ secrets.USERPREFS_JSONC_B64 }}
-        run: |
-          set -euo pipefail
-          
-          # Prüfe ob repo/ Verzeichnis existiert
-          if [ ! -d "repo" ]; then
-            echo "❌ FEHLER: 'repo' Verzeichnis existiert nicht!"
-            echo "Das Klonen ist wahrscheinlich fehlgeschlagen."
-            exit 1
-          fi
-          
-          echo "=== 📋 UserPrefs bereitstellen ==="
-          echo "Aktuelles Verzeichnis: $(pwd)"
-          echo "CONFIG_SRC: $CONFIG_SRC"
-          echo "CONFIG_DEST: $CONFIG_DEST"
-          
-          # Prüfe zuerst Secret, dann Datei im Workflow-Root
-          if [ -n "$USERPREFS_B64" ]; then
-            # Secret hat Vorrang - schreibe direkt ins Repo
-            echo "🔑 Verwende userPrefs aus GitHub Secret..."
-            cd repo
-            echo "$USERPREFS_B64" | base64 -d > "$CONFIG_DEST"
-            echo "✅ userPrefs aus Secret geschrieben."
-          elif [ -f "$CONFIG_SRC" ]; then
-            # Datei existiert im Workflow-Root - kopiere ins geklonte Repo
-            echo "📄 Kopiere $CONFIG_SRC aus Workflow-Root..."
-            cp "$CONFIG_SRC" "repo/$CONFIG_DEST"
-            echo "✅ userPrefs aus Workflow-Root kopiert: $(pwd)/$CONFIG_SRC -> repo/$CONFIG_DEST"
-          else
-            echo "⚠️ WARNUNG: Weder Secret noch $CONFIG_SRC gefunden!"
-            echo "Gesucht wurde:"
-            echo "  - GitHub Secret: USERPREFS_JSONC_B64 (leer)"
-            echo "  - Datei: $(pwd)/$CONFIG_SRC"
-            echo ""
-            echo "Verfügbare .jsonc Dateien im Workflow-Root:"
-            ls -la *.jsonc 2>/dev/null || echo "  (keine gefunden)"
-            echo ""
-            echo "⚠️ Build wird mit Meshtastic-Defaults fortgesetzt."
-          fi
-          
       - name: platformio-custom.py für alle Plattformen erweitern
         run: |
           set -euo pipefail
