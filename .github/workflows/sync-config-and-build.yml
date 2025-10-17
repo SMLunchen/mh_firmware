@@ -413,7 +413,7 @@ jobs:
                   sys.exit(1)
           
               flags = []
-              or key, value in prefs.items():
+              for key, value in prefs.items():
                   # String-Wert normalisieren (Zeilenumbrüche entfernen)
                   str_value = str(value).strip()
                   
