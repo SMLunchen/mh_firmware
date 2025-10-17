@@ -418,26 +418,33 @@ jobs:
                       # Booleans ohne Anführungszeichen
                       flags.append(f'-D{key}={str(value).lower()}')
                   elif isinstance(value, (int, float)):
-                      # Zahlen ohne Anführungszeichen
+                      # Zahlen ohne Anführungszeichen  
                       flags.append(f'-D{key}={value}')
                   else:
-                      # Alles andere als String behandeln
-                      str_value = str(value).strip()
+                      # String-Behandlung
+                      str_value = str(value)
+                      
+                      # AGGRESSIVE Zeilenumbruch-Entfernung
+                      str_value = str_value.replace('\n', ' ')
+                      str_value = str_value.replace('\r', ' ')
+                      str_value = str_value.replace('\r\n', ' ')
+                      # Alle Whitespace-Sequenzen durch einzelnes Leerzeichen ersetzen
+                      str_value = re.sub(r'\s+', ' ', str_value)
+                      str_value = str_value.strip()
                       
                       if str_value.startswith('{') and str_value.endswith('}'):
-                          # C-Arrays: Alle Whitespaces entfernen
-                          cleaned_array = re.sub(r'\s+', '', str_value)
+                          # C-Arrays: Leerzeichen entfernen
+                          cleaned_array = str_value.replace(' ', '')
                           flags.append(f'-D{key}={cleaned_array}')
                       elif 'meshtastic_' in str_value:
-                          # Enum-Werte ohne Anführungszeichen, aber Whitespace entfernen
-                          cleaned_enum = re.sub(r'\s+', '', str_value)
-                          flags.append(f'-D{key}={cleaned_enum}')
+                          # Enums ohne Anführungszeichen
+                          flags.append(f'-D{key}={str_value}')
                       else:
-                          # Normale Strings: Zeilenumbrüche durch Leerzeichen ersetzen
-                          # WICHTIG: Alle Arten von Zeilenumbrüchen abfangen
-                          cleaned_str = re.sub(r'\s+', ' ', str_value).strip()
-                          escaped = cleaned_str.replace('"', '\\"')
+                          # Normale Strings mit Anführungszeichen
+                          escaped = str_value.replace('"', '\\"')
                           flags.append(f'-D{key}="{escaped}"')
+              
+              return flags
                       
           print(' '.join(flags))
           PYEOF
