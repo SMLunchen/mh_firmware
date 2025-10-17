@@ -206,44 +206,51 @@ jobs:
           import sys
           
           with open('userPrefs.jsonc', 'r') as f:
-              json_str = re.sub(r'//.*', '', f.read(), flags=re.MULTILINE)
-              try:
-                  prefs = json.loads(json_str)
-              except json.JSONDecodeError as e:
-                  print(f"Error parsing userPrefs.jsonc: {e}", file=sys.stderr)
-                  sys.exit(1)
-          
-              flags = []
-              for key, value in prefs.items():
-                  if isinstance(value, bool):
-                      # Booleans ohne Anführungszeichen
-                      flags.append(f'-D{key}={str(value).lower()}')
-                  elif isinstance(value, (int, float)):
-                      # Zahlen ohne Anführungszeichen  
-                      flags.append(f'-D{key}={value}')
-                  else:
-                      # String-Behandlung
-                      str_value = str(value)
-                      
-                      # AGGRESSIVE Zeilenumbruch-Entfernung
-                      str_value = str_value.replace('\n', ' ')
-                      str_value = str_value.replace('\r', ' ')
-                      str_value = str_value.replace('\r\n', ' ')
-                      # Alle Whitespace-Sequenzen durch einzelnes Leerzeichen ersetzen
-                      str_value = re.sub(r'\s+', ' ', str_value)
-                      str_value = str_value.strip()
-                      
-                      if str_value.startswith('{') and str_value.endswith('}'):
-                          # C-Arrays: Leerzeichen entfernen
-                          cleaned_array = str_value.replace(' ', '')
-                          flags.append(f'-D{key}={cleaned_array}')
-                      elif 'meshtastic_' in str_value:
-                          # Enums ohne Anführungszeichen
-                          flags.append(f'-D{key}={str_value}')
-                      else:
-                          # Normale Strings mit Anführungszeichen
-                          escaped = str_value.replace('"', '\\"')
-                          flags.append(f'-D{key}="{escaped}"')
+            content = f.read().encode('utf-8').decode('utf-8')
+            
+            # Entferne Kommentare
+            json_str = re.sub(r'//.*', '', content, flags=re.MULTILINE)
+            
+            # Parse JSON
+            prefs = json.loads(json_str)
+            
+            # Generiere Flags mit aggressiver Bereinigung
+            flags = []
+            for key, value in prefs.items():
+                # Jeden Wert explizit bereinigen, egal was es ist
+                clean_value = str(value)
+                clean_value = clean_value.replace('\r\n', ' ')
+                clean_value = clean_value.replace('\r', ' ')  
+                clean_value = clean_value.replace('\n', ' ')
+                clean_value = ' '.join(clean_value.split())  # Normalisiert alle Whitespace
+                
+                if isinstance(value, bool):
+                    flags.append(f'-D{key}={clean_value.lower()}')
+                elif isinstance(value, (int, float)):
+                    flags.append(f'-D{key}={clean_value}')
+                elif clean_value.startswith('{') and clean_value.endswith('}'):
+                    array_clean = clean_value.replace(' ', '')
+                    flags.append(f'-D{key}={array_clean}')
+                elif 'meshtastic_' in clean_value:
+                    flags.append(f'-D{key}={clean_value}')
+                else:
+                    escaped = clean_value.replace('"', '\\"')
+                    flags.append(f'-D{key}="{escaped}"')
+            
+            # Finale Sicherheitsprüfung
+            final_flags = []
+            for flag in flags:
+                # Jeden Flag nochmals auf Zeilenumbrüche prüfen
+                safe_flag = flag.replace('\n', ' ').replace('\r', ' ')
+                safe_flag = ' '.join(safe_flag.split())
+                final_flags.append(safe_flag)
+            
+            # Ausgabe - aber auch hier sicher
+            for flag in final_flags:
+                # Prüfe vor Ausgabe nochmals
+                if '\n' in flag:
+                    print(f"WARNING: Newline found in flag: {repr(flag)}", file=sys.stderr)
+                print(flag)
                       
           print(' '.join(flags))
           PYEOF
