@@ -613,10 +613,8 @@ jobs:
             \"client_payload\": {
               \"version\": \"$VERSION\",
               \"short_version\": \"$SHORT_VERSION\",
-              \"base_version\": \"$BASE_VERSION\",
               \"display_version\": \"$DISPLAY_VERSION\",
               \"build_date\": \"$BUILD_DATE\",
-              \"build_type\": \"$BUILD_TYPE\",
               \"tag_name\": \"$TAG\",
               \"release_url\": \"$RELEASE_URL\",
               \"download_base_url\": \"https://github.com/${OWNER_REPO}/releases/download/${TAG}\",
