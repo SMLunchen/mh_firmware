@@ -443,8 +443,6 @@ jobs:
                           # Normale Strings mit Anführungszeichen
                           escaped = str_value.replace('"', '\\"')
                           flags.append(f'-D{key}="{escaped}"')
-              
-              return flags
                       
           print(' '.join(flags))
           PYEOF
