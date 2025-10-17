@@ -424,8 +424,8 @@ jobs:
               elif isinstance(value, str) and value.startswith('meshtastic_'):
                   flags.append(f'-D{key}={value}')
               else:
-                  escaped = str(value).replace('"', '\\"')
-                  flags.append(f'-D{key}=\\"{escaped}\\"')
+                  flags.append(f'-D{key}={value}')
+
           
           print(' '.join(flags))
           PYEOF
