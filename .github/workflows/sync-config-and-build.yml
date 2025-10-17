@@ -414,18 +414,11 @@ jobs:
           
           flags = []
           for key, value in prefs.items():
-              if isinstance(value, str) and value.strip().startswith('{'):
-                  clean_value = re.sub(r'\s+', '', value)
-                  flags.append(f'-D{key}={clean_value}')
-              elif isinstance(value, str) and value.lstrip('-').replace('.', '').isdigit():
-                  flags.append(f'-D{key}={value}')
-              elif value in ['true', 'false']:
-                  flags.append(f'-D{key}={value}')
-              elif isinstance(value, str) and value.startswith('meshtastic_'):
-                  flags.append(f'-D{key}={value}')
+              if isinstance(value, str):
+              escaped = str(value).replace('"', '\\"')
+              flags.append(f'-D{key}="{escaped}"')
               else:
-                  escaped = str(value).replace('"', '\\"')
-                  flags.append(f'-D{key}=\\"{escaped}\\"')
+                  flags.append(f'-D{key}={value}')
           
           print(' '.join(flags))
           PYEOF
