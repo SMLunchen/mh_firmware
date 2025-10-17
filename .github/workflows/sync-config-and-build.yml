@@ -75,6 +75,7 @@ jobs:
           fi
           test "$http_code" -lt 400
 
+# SCHRITT 1: Repo klonen - MIT BESSERER FEHLERBEHANDLUNG
       - name: Repo klonen
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -82,6 +83,10 @@ jobs:
           set -euo pipefail
           TARGET_REF="${{ steps.target.outputs.target_ref }}"
           IS_TAG_BUILD="${{ steps.target.outputs.is_tag_build }}"
+          
+          echo "=== 📥 Repository Clone ==="
+          echo "Target: $TARGET_REF"
+          echo "Is Tag Build: $IS_TAG_BUILD"
           
           if [ "$IS_TAG_BUILD" == "true" ]; then
             echo "🏷️ Cloning repository and checking out tag: $TARGET_REF"
@@ -96,24 +101,58 @@ jobs:
             cd repo
             git submodule update --init --recursive
           fi
-
+          
+          # Prüfe ob Clone erfolgreich war
+          if [ ! -d "../repo" ]; then
+            echo "❌ FEHLER: Repository wurde nicht geklont!"
+            exit 1
+          fi
+          
+          echo "✅ Repository erfolgreich geklont"
+          echo "Verzeichnis-Inhalt:"
+          ls -la
+          
       - name: userPrefs bereitstellen
         env:
           USERPREFS_B64: ${{ secrets.USERPREFS_JSONC_B64 }}
         run: |
           set -euo pipefail
-          cd repo
+          
+          # Prüfe ob repo/ Verzeichnis existiert
+          if [ ! -d "repo" ]; then
+            echo "❌ FEHLER: 'repo' Verzeichnis existiert nicht!"
+            echo "Das Klonen ist wahrscheinlich fehlgeschlagen."
+            exit 1
+          fi
+          
+          echo "=== 📋 UserPrefs bereitstellen ==="
+          echo "Aktuelles Verzeichnis: $(pwd)"
+          echo "CONFIG_SRC: $CONFIG_SRC"
+          echo "CONFIG_DEST: $CONFIG_DEST"
+          
+          # Prüfe zuerst Secret, dann Datei im Workflow-Root
           if [ -n "$USERPREFS_B64" ]; then
+            # Secret hat Vorrang - schreibe direkt ins Repo
+            echo "🔑 Verwende userPrefs aus GitHub Secret..."
+            cd repo
             echo "$USERPREFS_B64" | base64 -d > "$CONFIG_DEST"
             echo "✅ userPrefs aus Secret geschrieben."
           elif [ -f "$CONFIG_SRC" ]; then
+            # Datei existiert im Workflow-Root - kopiere ins geklonte Repo
+            echo "📄 Kopiere $CONFIG_SRC aus Workflow-Root..."
             cp "$CONFIG_SRC" "repo/$CONFIG_DEST"
-            echo "✅ userPrefs aus Repo ($CONFIG_SRC) kopiert."
+            echo "✅ userPrefs aus Workflow-Root kopiert: $(pwd)/$CONFIG_SRC -> repo/$CONFIG_DEST"
           else
-            echo "⚠️ WARN: Weder Secret noch $CONFIG_SRC gefunden. Es wird mit Defaults gebaut."
+            echo "⚠️ WARNUNG: Weder Secret noch $CONFIG_SRC gefunden!"
+            echo "Gesucht wurde:"
+            echo "  - GitHub Secret: USERPREFS_JSONC_B64 (leer)"
+            echo "  - Datei: $(pwd)/$CONFIG_SRC"
+            echo ""
+            echo "Verfügbare .jsonc Dateien im Workflow-Root:"
+            ls -la *.jsonc 2>/dev/null || echo "  (keine gefunden)"
+            echo ""
+            echo "⚠️ Build wird mit Meshtastic-Defaults fortgesetzt."
           fi
-          cd repo
-          head -n 5 "$CONFIG_DEST" || true
           
       - name: platformio-custom.py für alle Plattformen erweitern
         run: |
@@ -320,11 +359,20 @@ jobs:
         id: build_flags
         run: |
           set -euo pipefail
+          
+          # Prüfe ob repo existiert
+          if [ ! -d "repo" ]; then
+            echo "❌ FEHLER: repo/ Verzeichnis nicht gefunden!"
+            exit 1
+          fi
+          
           cd repo
+          
           # Prüfe ob userPrefs.jsonc existiert
           if [ ! -f "userPrefs.jsonc" ]; then
             echo "⚠️ Keine userPrefs.jsonc gefunden"
             echo "build_flags=" >> $GITHUB_OUTPUT
+            echo "EXTRA_BUILD_FLAGS=" >> $GITHUB_ENV
             exit 0
           fi
           
@@ -373,8 +421,10 @@ jobs:
           )
           
           if [ -z "$BUILD_FLAGS" ]; then
-            echo "❌ Keine Build-Flags generiert"
-            exit 1
+            echo "⚠️ Keine Build-Flags generiert (userPrefs könnte leer sein)"
+            echo "build_flags=" >> $GITHUB_OUTPUT
+            echo "EXTRA_BUILD_FLAGS=" >> $GITHUB_ENV
+            exit 0
           fi
           
           # In Output und ENV speichern
@@ -382,7 +432,7 @@ jobs:
           echo "EXTRA_BUILD_FLAGS=$BUILD_FLAGS" >> $GITHUB_ENV
           
           echo "✅ Build-Flags generiert:"
-          echo "$BUILD_FLAGS" | tr ' ' '\n' | head -10
+          echo "$BUILD_FLAGS" | tr ' ' '\n' | head -20
           echo "... ($(echo "$BUILD_FLAGS" | wc -w) Flags insgesamt)"
 
       - name: Docker Image ziehen
