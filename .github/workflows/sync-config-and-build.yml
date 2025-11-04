@@ -54,44 +54,6 @@ jobs:
             echo "🔄 Building develop branch"
           fi
 
-      - name: Fork mit Upstream mergen
-        if: steps.target.outputs.is_tag_build == 'false'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          
-          echo "🔄 Merging upstream changes manually..."
-          
-          # Upstream als Remote hinzufügen
-          git remote add upstream https://github.com/meshtastic/firmware.git || true
-          git fetch upstream
-          
-          # Aktuellen Branch state speichern
-          CURRENT_COMMIT=$(git rev-parse HEAD)
-          
-          # Versuche Merge (ohne Workflows)
-          if git merge upstream/$BRANCH --no-edit; then
-            echo "✅ Automatischer Merge erfolgreich"
-          else
-            echo "❌ Merge-Konflikt erkannt"
-            
-            # Bei Konflikten: Workflows vom Upstream überspringen
-            git reset --hard $CURRENT_COMMIT
-            
-            # Selective merge: Alles außer Workflows
-            git merge upstream/$BRANCH --no-commit --no-ff || true
-            
-            # Workflow-Konflikte zurücksetzen (unsere Version behalten)
-            git checkout HEAD -- .github/workflows/ || true
-            
-            # Commit durchführen
-            git add .
-            git commit -m "Merge upstream $BRANCH (keeping our workflows)" || true
-            
-            echo "✅ Selective Merge completed (workflows preserved)"
-          fi
-
       - name: Repo klonen und Config sichern
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
