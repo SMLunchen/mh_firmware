@@ -76,10 +76,26 @@ extern void stc8_gpio_set_level(int gpio, unsigned char level);
 #define LORA_MISO 7
 #define LORA_MOSI 6
 #define LORA_CS 10
+
+#if defined(CROWPANEL_ADV_P4_90)
+// Note: Elecrow swapped the socket's DIO1/NRESET wiring between 9.0 board
+// revisions (IO27/IO28 vs. IO53/IO54); this matches boards wired to IO27/IO28.
+// 9.0" wireless module socket (marking on top):
+// DIO1/IO27 o   o IO28/NRESET
+//   SCK/IO8 o   o IO46 (I2C1 SCL)
+//  MISO/IO7 o   o IO45 (I2C1 SDA)
+//  MOSI/IO6 o   o NC/DIO2
+//       3V3 o   o IO9/BUSY
+//       GND o   o IO10/NSS
+//        NC o   o NC/DIO3
+#define LORA_RESET 28
+#define SX126X_DIO1 27
+#else
 #define LORA_RESET 54
+#define SX126X_DIO1 53
+#endif
 
 #define SX126X_CS LORA_CS
-#define SX126X_DIO1 53
 #define SX126X_BUSY 9
 #define SX126X_RESET LORA_RESET
 #define SX126X_DIO2_AS_RF_SWITCH

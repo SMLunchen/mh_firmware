@@ -102,6 +102,15 @@ static const uint8_t T13 = 15;
 #define BOARD_SDIO_ESP_HOSTED_D2 50
 #define BOARD_SDIO_ESP_HOSTED_D3 49
 #define BOARD_SDIO_ESP_HOSTED_RESET 20
+#elif defined(CROWPANEL_ADV_P4_90)
+// CrowPanel Advanced P4 90" (HW V1.1+): data lines D0-D3 reversed vs. the 70"
+#define BOARD_SDIO_ESP_HOSTED_CLK 18
+#define BOARD_SDIO_ESP_HOSTED_CMD 19
+#define BOARD_SDIO_ESP_HOSTED_D0 17
+#define BOARD_SDIO_ESP_HOSTED_D1 16
+#define BOARD_SDIO_ESP_HOSTED_D2 15
+#define BOARD_SDIO_ESP_HOSTED_D3 14
+#define BOARD_SDIO_ESP_HOSTED_RESET 32
 #else
 // CrowPanel Advanced P4 70/90/101": 1-bit SDIO on Slot 1 with GPIO 18/19/14/15
 #define BOARD_SDIO_ESP_HOSTED_CLK 18
