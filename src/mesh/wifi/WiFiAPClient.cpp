@@ -391,7 +391,15 @@ bool initWifi()
             getMacAddr(dmac);
             snprintf(ourHost, sizeof(ourHost), "Meshtastic-%02x%02x", dmac[4], dmac[5]);
 
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(CONFIG_ESP_HOSTED_ENABLED)
+            // esp_wifi_init is an RPC to the co-processor and fails until the esp-hosted
+            // transport is up; the failure latches in wifiLowLevelInit, so retry until it sticks
+            for (int i = 0; i < 40 && !WiFi.mode(WIFI_STA); i++) {
+                delay(250);
+            }
+#else
             WiFi.mode(WIFI_STA);
+#endif
             WiFi.setHostname(ourHost);
 
             if (config.network.address_mode == meshtastic_Config_NetworkConfig_AddressMode_STATIC &&

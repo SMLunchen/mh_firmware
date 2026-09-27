@@ -1390,6 +1390,48 @@ void scannerToSensorsMap(const std::unique_ptr<ScanI2CTwoWire> &i2cScanner, Scan
 }
 #endif
 
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(CONFIG_ESP_HOSTED_ENABLED)
+#include "esp32-hal-hosted.h"
+// One-shot updater for the esp-hosted co-processor: the host library rejects RPCs
+// from older slave firmware (e.g. esp_wifi_init fails with ESP_ERR_INVALID_ARG), so
+// stream a matching slave image from LittleFS (/c6fw.bin) once hosted is up.
+static void maybeUpdateHostedSlave()
+{
+    static bool checked = false;
+    if (checked || !hostedIsInitialized())
+        return;
+    checked = true;
+    if (!hostedHasUpdate())
+        return;
+    File f = FSCom.open("/c6fw.bin", FILE_O_READ);
+    if (!f) {
+        LOG_WARN("Hosted slave update available (%s) but no /c6fw.bin in flash", hostedGetUpdateURL());
+        return;
+    }
+    LOG_INFO("Updating hosted slave firmware from /c6fw.bin (%u bytes)", (unsigned)f.size());
+    bool ok = hostedBeginUpdate();
+    if (ok) {
+        static uint8_t buf[2048];
+        size_t n;
+        while (ok && (n = f.read(buf, sizeof(buf))) > 0) {
+            ok = hostedWriteUpdate(buf, n);
+        }
+        ok = ok && hostedEndUpdate();
+        if (ok)
+            ok = hostedActivateUpdate();
+    }
+    f.close();
+    if (ok) {
+        LOG_INFO("Hosted slave updated, rebooting");
+        FSCom.remove("/c6fw.bin");
+        delay(2000);
+        ESP.restart();
+    } else {
+        LOG_ERROR("Hosted slave update failed");
+    }
+}
+#endif
+
 #ifndef PIO_UNIT_TESTING
 void loop()
 {
@@ -1397,6 +1439,10 @@ void loop()
 
     // The single writer of the monotonic wrap carry; every other caller only reads it.
     Time::serviceMonotonic();
+
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(CONFIG_ESP_HOSTED_ENABLED)
+    maybeUpdateHostedSlave();
+#endif
 
 #if defined(MESHTASTIC_ENCRYPTED_STORAGE) && defined(MESHTASTIC_PHONEAPI_ACCESS_CONTROL)
     if (lockdownDisablePending) {
