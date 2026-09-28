@@ -54,6 +54,8 @@ def wants_exfat(env):
 
 
 def ffconf_paths(env, phase):
+    import glob
+
     platform = env.PioPlatform()
     board = env.BoardConfig()
     chip = board.get("build.mcu", "") or board.get("build.chip_variant", "").lower()
@@ -65,7 +67,9 @@ def ffconf_paths(env, phase):
             paths.append(idf)
     libs_dir = platform.get_package_dir("framework-arduinoespressif32-libs")
     if libs_dir:
-        paths.append(join(libs_dir, chip, "include", "fatfs", "src", "ffconf.h"))
+        # custom-sdkconfig rebuilds live in a suffixed sibling (e.g. esp32p4_es)
+        for d in [join(libs_dir, chip)] + glob.glob(join(libs_dir, chip + "_*")):
+            paths.append(join(d, "include", "fatfs", "src", "ffconf.h"))
     return [p for p in paths if exists(p)]
 
 
