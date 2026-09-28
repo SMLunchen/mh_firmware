@@ -1392,22 +1392,37 @@ void scannerToSensorsMap(const std::unique_ptr<ScanI2CTwoWire> &i2cScanner, Scan
 
 #if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(CONFIG_ESP_HOSTED_ENABLED)
 #include "esp32-hal-hosted.h"
-// One-shot updater for the esp-hosted co-processor: the host library rejects RPCs
-// from older slave firmware (e.g. esp_wifi_init fails with ESP_ERR_INVALID_ARG), so
-// stream a matching slave image from LittleFS (/c6fw.bin) once hosted is up.
+// One-shot updater for the esp-hosted co-processor: mismatched slave firmware
+// breaks the RPC layer (e.g. esp_wifi_init fails with ESP_ERR_INVALID_ARG), so
+// stream the slave image shipped in LittleFS (/c6fw.bin) once hosted is up.
+// /c6fw.ver holds the image's version ("major.minor.patch"); the update runs
+// whenever the running slave version differs from it.
 static void maybeUpdateHostedSlave()
 {
     static bool checked = false;
     if (checked || !hostedIsInitialized())
         return;
     checked = true;
-    if (!hostedHasUpdate())
+    uint32_t want[3] = {0, 0, 0};
+    File vf = FSCom.open("/c6fw.ver", FILE_O_READ);
+    if (vf) {
+        char vbuf[24] = {0};
+        vf.read((uint8_t *)vbuf, sizeof(vbuf) - 1);
+        vf.close();
+        sscanf(vbuf, "%lu.%lu.%lu", (unsigned long *)&want[0], (unsigned long *)&want[1], (unsigned long *)&want[2]);
+    }
+    uint32_t maj, min, pat;
+    hostedGetSlaveVersion(&maj, &min, &pat);
+    bool wanted = want[0] && !(maj == want[0] && min == want[1] && pat == want[2]);
+    if (!wanted && !hostedHasUpdate())
         return;
     File f = FSCom.open("/c6fw.bin", FILE_O_READ);
     if (!f) {
-        LOG_WARN("Hosted slave update available (%s) but no /c6fw.bin in flash", hostedGetUpdateURL());
+        LOG_WARN("Hosted slave update wanted but no /c6fw.bin in flash (%s)", hostedGetUpdateURL());
         return;
     }
+    LOG_INFO("Hosted slave %lu.%lu.%lu -> %lu.%lu.%lu", (unsigned long)maj, (unsigned long)min, (unsigned long)pat,
+             (unsigned long)want[0], (unsigned long)want[1], (unsigned long)want[2]);
     LOG_INFO("Updating hosted slave firmware from /c6fw.bin (%u bytes)", (unsigned)f.size());
     bool ok = hostedBeginUpdate();
     if (ok) {
@@ -1422,8 +1437,8 @@ static void maybeUpdateHostedSlave()
     }
     f.close();
     if (ok) {
+        // keep /c6fw.bin: the version check makes the update idempotent
         LOG_INFO("Hosted slave updated, rebooting");
-        FSCom.remove("/c6fw.bin");
         delay(2000);
         ESP.restart();
     } else {

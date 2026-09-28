@@ -1,0 +1,39 @@
+diff --git a/slave/main/slave_wifi_std.c b/slave/main/slave_wifi_std.c
+index 6634737d8..0acc13de4 100644
+--- a/slave/main/slave_wifi_std.c
++++ b/slave/main/slave_wifi_std.c
+@@ -200,6 +200,17 @@ wifi_init_config_t * get_merged_init_config(wifi_init_config_t *dst_config, Wifi
+ 
+ 	dst_config->magic = src_config->magic;
+ 
++	/* Hosts built with mismatched esp_wifi_remote ABIs (e.g. pioarduino hybrid
++	 * builds mixing 1.6.3 libs with 1.6.5 app components) serialize a shifted
++	 * wifi_init_config_t: the magic is garbage and all buffer values are
++	 * unreliable. Fall back to the slave's own defaults in that case. */
++	if (dst_config->magic != WIFI_INIT_CONFIG_MAGIC) {
++		ESP_LOGW(TAG, "host wifi_init cfg magic invalid (0x%x) - using slave defaults",
++				(unsigned)dst_config->magic);
++		wifi_init_config_t defaults = WIFI_INIT_CONFIG_DEFAULT();
++		*dst_config = defaults;
++	}
++
+ 	return dst_config;
+ }
+ 
+diff --git a/slave/main/esp_hosted_coprocessor_fw_ver.h b/slave/main/esp_hosted_coprocessor_fw_ver.h
+index b69eeabd2..155d5db36 100644
+--- a/slave/main/esp_hosted_coprocessor_fw_ver.h
++++ b/slave/main/esp_hosted_coprocessor_fw_ver.h
+@@ -13,9 +13,11 @@
+ #ifndef __ESP_HOSTED_COPROCESSOR_FW_VER_H__
+ #define __ESP_HOSTED_COPROCESSOR_FW_VER_H__
+ 
++/* patch 14 = local defensive build: tolerates garbled wifi_init cfg from
++ * ABI-mixed hosts (see get_merged_init_config in slave_wifi_std.c) */
+ #define PROJECT_VERSION_MAJOR_1 2
+ #define PROJECT_VERSION_MINOR_1 12
+-#define PROJECT_VERSION_PATCH_1 13
++#define PROJECT_VERSION_PATCH_1 14
+ 
+ /**
+  * Macro to convert version number into an integer
