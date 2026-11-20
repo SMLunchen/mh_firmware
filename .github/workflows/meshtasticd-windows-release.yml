@@ -1,0 +1,105 @@
+name: meshtasticd Windows MSI (Meshhessen)
+
+# Builds the native Windows daemon with upstream's own reusable workflow (meshtasticd.exe, packaged as an MSI that
+# installs the "meshtasticd" Windows service) and publishes the MSI as a GitHub release asset named
+# meshtasticd-<version>-x64.msi. The Meshhessen Client's MeshStick assistant downloads exactly that asset from this
+# repository's releases. Upstream builds the MSI on every CI run but does not attach it to its releases yet.
+#
+# Runs on every push to the meshtasticd-windows branch (which tracks an upstream release tag) and on demand.
+# To update: merge the next upstream release tag into the branch and push.
+
+on:
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: Mark the GitHub release as a pre-release
+        type: boolean
+        default: true
+  push:
+    branches:
+      - meshtasticd-windows
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      long: ${{ steps.version.outputs.long }}
+      short: ${{ steps.version.outputs.short }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: 3.x
+
+      # Same strings the Windows build itself uses: short = 2.8.2 (MSI product version, part of the asset name),
+      # long = 2.8.2.<sha> (release tag).
+      - name: Read version
+        id: version
+        run: |
+          echo "long=$(python3 ./bin/buildinfo.py long)" >> "$GITHUB_OUTPUT"
+          echo "short=$(python3 ./bin/buildinfo.py short)" >> "$GITHUB_OUTPUT"
+
+  build-windows:
+    uses: ./.github/workflows/build_windows_bin.yml
+    with:
+      windows_ver: "2025"
+
+  release:
+    needs:
+      - version
+      - build-windows
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download the MSI artifact
+        uses: actions/download-artifact@v8
+        with:
+          pattern: meshtasticd-msi-*
+          merge-multiple: true
+          path: ./msi
+
+      - name: Collect the installer and write its checksum
+        run: |
+          set -euo pipefail
+          mkdir -p ./release
+          msi=$(find ./msi -name 'meshtasticd-*-x64.msi' | head -n 1)
+          if [ -z "$msi" ]; then
+            echo "::error::no meshtasticd-*-x64.msi in the build artifact"
+            find ./msi
+            exit 1
+          fi
+          cp "$msi" ./release/
+          cd ./release
+          sha256sum *.msi > "$(basename "$msi").sha256"
+          ls -la
+          cat ./*.sha256
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: meshtasticd-v${{ needs.version.outputs.long }}
+          name: meshtasticd ${{ needs.version.outputs.short }} für Windows (${{ needs.version.outputs.long }})
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ github.event.inputs.prerelease != 'false' }}
+          make_latest: false
+          files: |
+            release/*.msi
+            release/*.sha256
+          body: |
+            Nativer Windows-Build von meshtasticd ${{ needs.version.outputs.long }} (Meshtastic-Firmware für den PC) als MSI.
+            Installiert `%ProgramFiles%\Meshtastic\meshtasticd.exe` und den automatisch startenden Windows-Dienst
+            **meshtasticd**, der `%ProgramData%\Meshtastic\config.yaml` liest. Gedacht für den Elecrow MeshStick
+            (CH341A USB-SPI + SX1262; Treiber WCH CH341PAR erforderlich) – der Meshhessen Client richtet ihn über
+            **Tools → MeshStick einrichten** ein.
+
+            Native Windows build of meshtasticd ${{ needs.version.outputs.long }} as an MSI: installs the daemon and the
+            auto-starting Windows service **meshtasticd** (config in `%ProgramData%\Meshtastic\config.yaml`). Built with
+            upstream's `build_windows_bin.yml`; SHA-256 of the installer is in the `.sha256` file.
