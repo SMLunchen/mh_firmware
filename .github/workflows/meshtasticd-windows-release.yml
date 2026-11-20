@@ -1,6 +1,6 @@
 name: meshtasticd Windows MSI (Meshhessen)
 
-# Builds the native Windows daemon with upstream's own reusable workflow (meshtasticd.exe, packaged as an MSI that
+## Builds the native Windows daemon with upstream's own reusable workflow (meshtasticd.exe, packaged as an MSI that
 # installs the "meshtasticd" Windows service) and publishes the MSI as a GitHub release asset named
 # meshtasticd-<version>-x64.msi. The Meshhessen Client's MeshStick assistant downloads exactly that asset from this
 # repository's releases. Upstream builds the MSI on every CI run but does not attach it to its releases yet.
